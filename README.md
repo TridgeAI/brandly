@@ -2,6 +2,8 @@
 
 A production-ready Next.js app for internal marketing teams to build Brand DNA profiles, generate on-brand social content, schedule posts, and automate publishing.
 
+> **Product direction:** the plan for turning this prototype into a multi-user SMB platform is in [docs/PRODUCT_SCOPE.md](docs/PRODUCT_SCOPE.md). Start there.
+
 ## Features
 
 - **Brand Intelligence** — Crawl website, Instagram, and PDF catalogues (raster + vector) to auto-build a Brand DNA profile
