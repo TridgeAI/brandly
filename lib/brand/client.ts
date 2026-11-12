@@ -3,9 +3,7 @@ import type { BrandModel } from "./model";
 import type { Finding } from "./stages/types";
 import type { RunResult, PipelineId } from "./pipelines";
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-/** Starts a pipeline job and polls it, streaming findings to the UI. */
+/** Runs a pipeline and reads its progress stream (NDJSON), passing findings to the UI as they arrive. */
 export async function runPipeline(
   pipeline: PipelineId,
   model: BrandModel,
@@ -13,24 +11,48 @@ export async function runPipeline(
   onFindings: (f: Finding[]) => void,
   signal?: AbortSignal
 ): Promise<RunResult> {
-  const start = await fetch(`/api/brands/${encodeURIComponent(model.id)}/run`, {
+  const res = await fetch(`/api/brands/${encodeURIComponent(model.id)}/run`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ pipeline, model, input }),
     signal,
   });
-  const { jobId, error } = await start.json().catch(() => ({ error: `HTTP ${start.status}` }));
-  if (!jobId) throw new Error(error ?? "Couldn't start");
-
-  for (;;) {
-    if (signal?.aborted) throw new Error("Cancelled");
-    await sleep(700);
-    const res = await fetch(`/api/jobs/${jobId}`, { signal, cache: "no-store" });
-    const job = await res.json();
-    if (job.findings) onFindings(job.findings);
-    if (job.status === "done") return job.result as RunResult;
-    if (job.status === "error" || !res.ok) throw new Error(job.error ?? "Something went wrong");
+  if (!res.ok || !res.body) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error ?? (res.status === 413 ? "Those files are too large. Try fewer or smaller files." : `Couldn't start (HTTP ${res.status})`));
   }
+
+  const findings = new Map<string, Finding>();
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (value) buffer += decoder.decode(value, { stream: true });
+    let nl: number;
+    while ((nl = buffer.indexOf("\n")) >= 0) {
+      const line = buffer.slice(0, nl).trim();
+      buffer = buffer.slice(nl + 1);
+      if (!line) continue;
+      const event = JSON.parse(line) as
+        | { type: "finding"; finding: Finding }
+        | { type: "done"; result: RunResult }
+        | { type: "error"; error: string }
+        | { type: "ping" };
+      if (event.type === "finding") {
+        findings.set(event.finding.id, event.finding);
+        onFindings([...findings.values()]);
+      } else if (event.type === "done") {
+        return event.result;
+      } else if (event.type === "error") {
+        // Anything still in progress failed with the run.
+        onFindings([...findings.values()].map((f) => (f.status === "info" ? { ...f, status: "error" as const } : f)));
+        throw new Error(event.error);
+      }
+    }
+    if (done) break;
+  }
+  throw new Error("The connection closed before Brandly finished. Please try again.");
 }
 
 export async function runStage(stageId: string, model: BrandModel, input: Record<string, unknown> = {}): Promise<RunResult> {

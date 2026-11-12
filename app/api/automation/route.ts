@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+
+export const maxDuration = 60;
 import { generateText, parseJSON } from "@/lib/llm";
 import type { BrandDNA, GeneratedPost, TriggerConfig } from "@/lib/types";
 import { fetchRssFeed, fetchProductPageContent } from "@/lib/automation-utils";

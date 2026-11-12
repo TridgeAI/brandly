@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+
+export const maxDuration = 60;
 import { generateText, parseJSON } from "@/lib/llm";
 import type { GeneratePostPayload, GeneratedPost } from "@/lib/types";
 import { CONTENT_TEMPLATES, PLATFORM_LIMITS } from "@/lib/templates";

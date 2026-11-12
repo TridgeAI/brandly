@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+
+export const maxDuration = 60;
 import { generateText } from "@/lib/llm";
 import { toPromptContext } from "@/lib/brand/projection";
 import type { BrandModel } from "@/lib/brand/model";

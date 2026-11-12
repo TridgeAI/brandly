@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+
+export const maxDuration = 60;
 import type { AnalyseBrandPayload } from "@/lib/types";
 import { callN8n, n8nEnabled } from "@/lib/n8n";
 import { emptyModel } from "@/lib/brand/model";

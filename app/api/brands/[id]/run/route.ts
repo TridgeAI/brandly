@@ -1,12 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PIPELINES, runStages, type PipelineId } from "@/lib/brand/pipelines";
-import { createJob, runJob } from "@/lib/brand/jobs";
+import { friendlyError } from "@/lib/brand/jobs";
 import { emptyModel, type BrandModel } from "@/lib/brand/model";
 
-// Runs a whole pipeline (e.g. "analyse") as a background job.
+// Long enough for a website read + AI synthesis; well inside Vercel's limits.
+export const maxDuration = 120;
+
+// Runs a whole pipeline (e.g. "analyse") and streams progress in the same response
+// as newline-delimited JSON, so it works on serverless hosts where a separate
+// "poll the job" request could land on a different instance.
+//   {"type":"finding","finding":{...}}   one per update
+//   {"type":"done","result":{...}}       once, at the end
+//   {"type":"error","error":"..."}       once, on failure
 // Phase 1 is stateless: the browser sends the current model and gets the merged model back.
-// Body: { pipeline: "analyse" | "build" | "refine", model?: BrandModel, name?: string, input: {...} }
-// Response: 202 { jobId }  → poll GET /api/jobs/:jobId
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const body = (await req.json().catch(() => ({}))) as {
@@ -19,7 +25,31 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   if (!(pipeline in PIPELINES)) return NextResponse.json({ error: `Unknown pipeline "${pipeline}"` }, { status: 400 });
 
   const model = body.model ?? emptyModel(body.name?.trim() || "Untitled brand", pipeline, id);
-  const job = createJob();
-  runJob(job, (report) => runStages(PIPELINES[pipeline], model, body.input ?? {}, report));
-  return NextResponse.json({ jobId: job.id }, { status: 202 });
+  const encoder = new TextEncoder();
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (obj: unknown) => controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
+      // Keep the connection alive while a slow model is thinking.
+      const ping = setInterval(() => send({ type: "ping" }), 10_000);
+      try {
+        const result = await runStages(PIPELINES[pipeline], model, body.input ?? {}, (finding) => send({ type: "finding", finding }));
+        send({ type: "done", result });
+      } catch (err) {
+        console.error(`[run ${pipeline}]`, err);
+        send({ type: "error", error: friendlyError(err) });
+      } finally {
+        clearInterval(ping);
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "application/x-ndjson; charset=utf-8",
+      "Cache-Control": "no-store, no-transform",
+      "X-Accel-Buffering": "no",
+    },
+  });
 }

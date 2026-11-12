@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+
+export const maxDuration = 60;
 import { STAGES, runStages } from "@/lib/brand/pipelines";
 import type { BrandModel } from "@/lib/brand/model";
 import { friendlyError } from "@/lib/brand/jobs";
