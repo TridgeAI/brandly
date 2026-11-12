@@ -27,3 +27,7 @@ next-env.d.ts
 
 # Local browser-test artifacts
 .playwright-mcp/
+
+.vercel
+.env*
+!.env.example
