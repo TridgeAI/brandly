@@ -1,76 +1,109 @@
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=Playfair+Display:wght@500;600;700&display=swap');
-
+/* Theme tokens (RGB channels so Tailwind opacity modifiers work). */
 :root {
-  --font-dm-sans: 'DM Sans', system-ui, sans-serif;
-  --font-playfair: 'Playfair Display', Georgia, serif;
+  --font-sans: 'Geist', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, monospace;
+
+  --bg: 250 250 249;          /* warm off-white page */
+  --surface: 255 255 255;     /* sidebar, inputs */
+  --card: 255 255 255;
+  --border: 231 229 228;
+  --text: 28 25 23;
+  --text-muted: 113 108 103;
+  --accent: 28 25 23;         /* ink: primary actions */
+  --accent-light: 68 64 60;
+  --accent-fg: 255 255 255;
+  --success: 21 128 61;
+  --warn: 180 83 9;
+  --error: 185 28 28;
+  color-scheme: light;
 }
 
-* {
-  box-sizing: border-box;
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: 17 17 16;
+    --surface: 24 24 23;
+    --card: 28 28 27;
+    --border: 48 46 44;
+    --text: 237 235 232;
+    --text-muted: 161 157 152;
+    --accent: 237 235 232;
+    --accent-light: 214 211 207;
+    --accent-fg: 23 23 22;
+    --success: 74 222 128;
+    --warn: 251 191 36;
+    --error: 248 113 113;
+    color-scheme: dark;
+  }
 }
+:root[data-theme="dark"] {
+  --bg: 17 17 16;
+  --surface: 24 24 23;
+  --card: 28 28 27;
+  --border: 48 46 44;
+  --text: 237 235 232;
+  --text-muted: 161 157 152;
+  --accent: 237 235 232;
+  --accent-light: 214 211 207;
+  --accent-fg: 23 23 22;
+  --success: 74 222 128;
+  --warn: 251 191 36;
+  --error: 248 113 113;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
 
 html, body {
-  background: #0A0A0F;
-  color: #E8E8F0;
-  font-family: var(--font-dm-sans);
+  background: rgb(var(--bg));
+  color: rgb(var(--text));
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
+  font-feature-settings: "ss01", "cv11";
 }
 
-::selection {
-  background: rgba(124, 110, 248, 0.3);
-  color: #E8E8F0;
+::selection { background: rgb(var(--text) / 0.12); }
+
+:focus-visible {
+  outline: 2px solid rgb(var(--text));
+  outline-offset: 2px;
+  border-radius: 6px;
 }
 
-::-webkit-scrollbar {
-  width: 4px;
-  height: 4px;
-}
-::-webkit-scrollbar-track {
-  background: #12121A;
-}
-::-webkit-scrollbar-thumb {
-  background: #2A2A40;
-  border-radius: 2px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: #7C6EF8;
-}
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgb(var(--border)); border-radius: 8px; border: 2px solid rgb(var(--bg)); }
 
-::placeholder {
-  color: #6B6B8A;
-}
+::placeholder { color: rgb(var(--text-muted) / 0.8); }
 
-/* Animations */
-@keyframes fadeUp {
-  from { opacity: 0; transform: translateY(10px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
-@keyframes spinSlow {
-  from { transform: rotate(0deg); }
-  to   { transform: rotate(360deg); }
-}
-@keyframes pulse-dot {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50%       { opacity: 0.4; transform: scale(0.7); }
-}
-
-.animate-fade-up   { animation: fadeUp 0.45s ease forwards; }
-.animate-fade-in   { animation: fadeIn 0.3s ease forwards; }
-.animate-spin-slow { animation: spinSlow 3s linear infinite; }
+/* Motion: short, only on state changes. */
+@keyframes fadeUp { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+.animate-fade-up   { animation: fadeUp 0.18s ease-out both; }
+.animate-fade-in   { animation: fadeIn 0.15s ease-out both; }
 .animate-pulse-dot { animation: pulse-dot 1.4s ease-in-out infinite; }
+/* Kept for older markup; staggering is intentionally removed. */
+.stagger > * { animation-delay: 0ms; }
 
-/* Staggered children */
-.stagger > *:nth-child(1) { animation-delay: 0ms; }
-.stagger > *:nth-child(2) { animation-delay: 60ms; }
-.stagger > *:nth-child(3) { animation-delay: 120ms; }
-.stagger > *:nth-child(4) { animation-delay: 180ms; }
-.stagger > *:nth-child(5) { animation-delay: 240ms; }
-.stagger > *:nth-child(6) { animation-delay: 300ms; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}
+
+/* Range input used by voice sliders */
+input[type="range"].tone {
+  -webkit-appearance: none; appearance: none; width: 100%; height: 4px; border-radius: 4px;
+  background: rgb(var(--border)); outline-offset: 6px;
+}
+input[type="range"].tone::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; width: 18px; height: 18px; border-radius: 50%;
+  background: rgb(var(--card)); border: 2px solid rgb(var(--text)); cursor: pointer;
+}
+input[type="range"].tone::-moz-range-thumb {
+  width: 16px; height: 16px; border-radius: 50%; background: rgb(var(--card)); border: 2px solid rgb(var(--text)); cursor: pointer;
+}

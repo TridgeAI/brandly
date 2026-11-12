@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { analyseImages, parseJSON } from "@/lib/llm";
 import type { AnalysePdfPayload } from "@/lib/types";
+import { callN8n, n8nEnabled } from "@/lib/n8n";
 
 const PDF_VISION_PROMPT = `These are rasterised pages from a brand PDF catalogue.
 Each page is rendered at full resolution — ALL visual content is visible:
@@ -25,6 +26,7 @@ Return ONLY a JSON object (no markdown, no preamble):
 export async function POST(req: NextRequest) {
   try {
     const body: AnalysePdfPayload = await req.json();
+    if (n8nEnabled()) return callN8n("analyse-pdf", body);
     const { pages, brandName } = body;
 
     if (!pages || pages.length === 0) {

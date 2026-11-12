@@ -32,7 +32,10 @@ export interface BrandSources {
 export interface Brand {
   id: string;
   name: string;
+  /** Legacy flat projection of `model`, kept so existing pages and routes keep working. */
   dna: BrandDNA;
+  /** Canonical Brand Model (see lib/brand/model.ts). */
+  model?: import("./brand/model").BrandModel;
   sources: BrandSources;
   createdAt: string;
   updatedAt: string;
@@ -130,6 +133,8 @@ export interface AnalyseBrandPayload {
 
 export interface GeneratePostPayload {
   brandDNA: BrandDNA;
+  /** When present, the richer model is used for the prompt (and prompt caching). */
+  brandModel?: import("./brand/model").BrandModel;
   template: TemplateCategory;
   topic?: string;
   platforms: Platform[];

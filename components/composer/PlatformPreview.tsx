@@ -9,9 +9,10 @@ interface Props {
   platforms: Platform[];
   brandDNA?: BrandDNA | null;
   igHandle?: string;
+  imageUrl?: string | null;
 }
 
-export default function PlatformPreview({ post, platforms, brandDNA, igHandle }: Props) {
+export default function PlatformPreview({ post, platforms, brandDNA, igHandle, imageUrl }: Props) {
   const [active, setActive] = useState<Platform>(platforms[0]);
 
   const getCaption = () => {
@@ -59,7 +60,7 @@ export default function PlatformPreview({ post, platforms, brandDNA, igHandle }:
             style={{
               background: brandDNA
                 ? `linear-gradient(135deg, ${brandDNA.colors.primary}, ${brandDNA.colors.secondary})`
-                : "linear-gradient(135deg, #7C6EF8, #A89DF9)",
+                : "rgb(var(--text) / 0.15)",
             }}
           />
           <div>
@@ -74,30 +75,39 @@ export default function PlatformPreview({ post, platforms, brandDNA, igHandle }:
           </div>
         </div>
 
+        {/* Generated image */}
+        {imageUrl && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={imageUrl}
+            alt={post.imagePrompt}
+            className="w-full object-cover border-b border-border"
+          />
+        )}
+
         {/* Image placeholder */}
-        {(active === "instagram" || active === "facebook") && (
+        {!imageUrl && (active === "instagram" || active === "facebook") && (
           <div
             className="aspect-square flex flex-col items-center justify-center p-6 text-center border-b border-border"
             style={{
               background: brandDNA
                 ? `linear-gradient(135deg, ${brandDNA.colors.primary}18, ${brandDNA.colors.secondary}18)`
-                : "linear-gradient(135deg, #7C6EF818, #A89DF918)",
+                : "rgb(var(--text) / 0.04)",
             }}
           >
-            <div className="text-4xl mb-3">🎨</div>
-            <p className="text-xs font-semibold text-accent-light mb-2">Image Generation Prompt</p>
+            <p className="text-xs font-medium text-text mb-2">Image idea</p>
             <p className="text-xs text-text-muted leading-relaxed max-w-xs">{post.imagePrompt}</p>
           </div>
         )}
 
         {/* LinkedIn header image */}
-        {active === "linkedin" && (
+        {!imageUrl && active === "linkedin" && (
           <div
             className="h-32 flex items-center justify-center border-b border-border"
             style={{
               background: brandDNA
                 ? `linear-gradient(135deg, ${brandDNA.colors.primary}, ${brandDNA.colors.accent})`
-                : "linear-gradient(135deg, #7C6EF8, #A89DF9)",
+                : "rgb(var(--text) / 0.15)",
             }}
           >
             <p className="text-white/70 text-xs font-medium">Banner image area</p>

@@ -2,6 +2,8 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { Brand, ScheduledPost, AutomationRule, Platform } from "./types";
+import type { BrandModel } from "./brand/model";
+import { fromBrandDNA, toBrandDNA } from "./brand/projection";
 
 interface AppState {
   // Brands
@@ -12,6 +14,8 @@ interface AppState {
   deleteBrand: (id: string) => void;
   setActiveBrand: (id: string) => void;
   getActiveBrand: () => Brand | null;
+  /** Saves a Brand Model and keeps the legacy `dna` projection in sync. */
+  saveBrandModel: (model: BrandModel, sources?: Brand["sources"]) => void;
 
   // Posts
   posts: ScheduledPost[];
@@ -52,15 +56,37 @@ export const useStore = create<AppState>()(
           ),
         })),
 
+      // Also removes the brand's posts and automation rules so nothing is left orphaned.
       deleteBrand: (id) =>
         set((s) => ({
           brands: s.brands.filter((b) => b.id !== id),
+          posts: s.posts.filter((p) => p.brandId !== id),
+          automationRules: s.automationRules.filter((r) => r.brandId !== id),
           activeBrandId: s.activeBrandId === id
             ? (s.brands.find((b) => b.id !== id)?.id ?? null)
             : s.activeBrandId,
         })),
 
       setActiveBrand: (id) => set({ activeBrandId: id }),
+
+      saveBrandModel: (model, sources) =>
+        set((s) => {
+          const now = new Date().toISOString();
+          const existing = s.brands.find((b) => b.id === model.id);
+          const brand: Brand = {
+            id: model.id,
+            name: model.name,
+            dna: toBrandDNA(model),
+            model,
+            sources: sources ?? existing?.sources ?? {},
+            createdAt: existing?.createdAt ?? now,
+            updatedAt: now,
+          };
+          return {
+            brands: existing ? s.brands.map((b) => (b.id === model.id ? brand : b)) : [...s.brands, brand],
+            activeBrandId: model.id,
+          };
+        }),
 
       getActiveBrand: () => {
         const { brands, activeBrandId } = get();
@@ -106,6 +132,15 @@ export const useStore = create<AppState>()(
     }),
     {
       name: "brandly-store",
+      // v2: every brand carries a Brand Model. Older saved brands are wrapped from their DNA.
+      version: 2,
+      migrate: (persisted, fromVersion) => {
+        const state = persisted as { brands?: Brand[] } & Record<string, unknown>;
+        if (fromVersion < 2 && Array.isArray(state.brands)) {
+          state.brands = state.brands.map((b) => (b.model ? b : { ...b, model: fromBrandDNA(b.dna, b.id) }));
+        }
+        return state as unknown as AppState;
+      },
       // Only persist data, not UI state
       partialize: (s) => ({
         brands: s.brands,

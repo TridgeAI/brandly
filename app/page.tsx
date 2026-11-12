@@ -1,215 +1,173 @@
 "use client";
-import AppShell from "@/components/layout/AppShell";
-import { useStore } from "@/lib/store";
-import { Card, Chip, PageHeader, EmptyState, Button } from "@/components/ui";
 import Link from "next/link";
-import { format, parseISO, isAfter } from "date-fns";
-import { PLATFORM_ICONS, PLATFORM_LABELS } from "@/lib/templates";
-import type { Platform } from "@/lib/types";
+import { addDays, format, isAfter, isBefore, parseISO } from "date-fns";
+import { ArrowRight, Check, Sprout, Store } from "lucide-react";
+import clsx from "clsx";
+import AppShell from "@/components/layout/AppShell";
+import { Button, Card } from "@/components/ui";
+import { PlatformIcon } from "@/components/ui/icons";
+import { useStore } from "@/lib/store";
 
-export default function DashboardPage() {
+export default function HomePage() {
   const { brands, getActiveBrand, posts, automationRules } = useStore();
-  const activeBrand = getActiveBrand();
+  const brand = getActiveBrand();
 
-  const brandPosts = activeBrand
-    ? posts.filter((p) => p.brandId === activeBrand.id)
-    : [];
-  const scheduledPosts = brandPosts.filter(
-    (p) => p.status === "scheduled" && isAfter(parseISO(p.scheduledAt), new Date())
-  );
-  const publishedPosts = brandPosts.filter((p) => p.status === "published");
-  const brandRules = activeBrand
-    ? automationRules.filter((r) => r.brandId === activeBrand.id)
-    : [];
-  const activeRules = brandRules.filter((r) => r.status === "active");
+  if (!brands.length || !brand) {
+    return (
+      <AppShell>
+        <div className="max-w-2xl mx-auto px-4 sm:px-6 py-12 sm:py-20">
+          <h1 className="text-3xl font-semibold tracking-tight">Posts that sound like you, every week.</h1>
+          <p className="text-text-muted mt-3 text-[15px] leading-relaxed max-w-lg">
+            Brandly learns your brand once, then writes, plans and schedules your social posts. Start with what you have.
+          </p>
+          <div className="mt-10 grid sm:grid-cols-2 gap-3">
+            <Link href="/onboarding" className="rounded-2xl border border-border bg-card p-5 hover:border-text/30 transition-colors">
+              <Store size={20} strokeWidth={1.75} />
+              <p className="font-medium mt-3">I have a website or Instagram</p>
+              <p className="text-sm text-text-muted mt-1">We read your colours, fonts and voice in about a minute.</p>
+            </Link>
+            <Link href="/onboarding" className="rounded-2xl border border-border bg-card p-5 hover:border-text/30 transition-colors">
+              <Sprout size={20} strokeWidth={1.75} />
+              <p className="font-medium mt-3">I&apos;m starting from scratch</p>
+              <p className="text-sm text-text-muted mt-1">Answer a few questions and pick one of three directions.</p>
+            </Link>
+          </div>
+        </div>
+      </AppShell>
+    );
+  }
+
+  const now = new Date();
+  const weekEnd = addDays(now, 7);
+  const brandPosts = posts.filter((p) => p.brandId === brand.id);
+  const thisWeek = brandPosts
+    .filter((p) => p.status === "scheduled" && isAfter(parseISO(p.scheduledAt), now) && isBefore(parseISO(p.scheduledAt), weekEnd))
+    .sort((a, b) => a.scheduledAt.localeCompare(b.scheduledAt));
+  const drafts = brandPosts.filter((p) => p.status === "draft");
+  const rules = automationRules.filter((r) => r.brandId === brand.id);
+  const audience = brand.model?.strategy.audience;
+  const audienceConfirmed = !!brand.model && Object.entries(brand.model.meta).some(([p, m]) => p.startsWith("strategy.audience") && m.source === "user");
+
+  const checklist = [
+    { done: true, label: "Set up your brand", href: "/brand" },
+    { done: audienceConfirmed || !!audience?.ageGroups.length, label: "Confirm who your audience is", href: "/brand#section-strategy.audience" },
+    { done: brandPosts.length > 0, label: "Write your first post", href: "/composer" },
+    { done: brandPosts.some((p) => p.status === "scheduled" || p.status === "published"), label: "Schedule a post", href: "/calendar" },
+    { done: rules.length > 0, label: "Turn on one automation", href: "/automation" },
+  ];
+  const remaining = checklist.filter((c) => !c.done).length;
+  const colors = Object.values(brand.dna.colors);
 
   return (
     <AppShell>
-      <div className="p-8 max-w-6xl mx-auto">
-        {brands.length === 0 ? (
-          <div className="flex flex-col items-center justify-center min-h-[70vh] text-center">
-            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-accent to-accent-light flex items-center justify-center text-2xl mb-6 animate-spin-slow">
-              ✦
-            </div>
-            <h1 className="font-display text-4xl font-bold mb-3">Welcome to Brandly</h1>
-            <p className="text-text-muted text-lg mb-8 max-w-md">
-              Start by building your Brand DNA — upload your website, Instagram, or product catalogue.
-            </p>
-            <Link href="/onboarding">
-              <Button size="lg">Build Your First Brand →</Button>
-            </Link>
+      <div className="max-w-5xl mx-auto px-4 sm:px-8 py-8">
+        <div className="flex items-start justify-between gap-4 flex-wrap mb-8">
+          <div>
+            <p className="text-xs text-text-muted">{format(now, "EEEE, d MMMM")}</p>
+            <h1 className="text-2xl font-semibold tracking-tight mt-0.5">{brand.name}</h1>
           </div>
-        ) : (
-          <>
-            <PageHeader
-              title={activeBrand ? `${activeBrand.name}` : "Dashboard"}
-              subtitle={activeBrand?.dna.one_liner}
-              action={
-                <Link href="/composer">
-                  <Button>✏️ Create Post</Button>
-                </Link>
-              }
-            />
+          <Link href="/composer">
+            <Button>
+              Write a post <ArrowRight size={16} />
+            </Button>
+          </Link>
+        </div>
 
-            {/* Active brand colour bar */}
-            {activeBrand && (
-              <div className="flex gap-2 mb-8">
-                {Object.entries(activeBrand.dna.colors).map(([name, hex]) => (
-                  <div
-                    key={name}
-                    className="h-2 flex-1 rounded-full"
-                    style={{ background: hex }}
-                    title={`${name}: ${hex}`}
-                  />
-                ))}
+        <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
+          <div className="space-y-6 min-w-0">
+            <Card className="p-5">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="font-medium">This week</h2>
+                <Link href="/calendar" className="text-sm text-text-muted hover:text-text">
+                  Calendar
+                </Link>
               </div>
+              {thisWeek.length === 0 ? (
+                <p className="text-sm text-text-muted py-6 text-center">
+                  Nothing scheduled for the next 7 days.{" "}
+                  <Link href="/composer" className="underline underline-offset-2 hover:text-text">
+                    Write a post
+                  </Link>
+                </p>
+              ) : (
+                <ul className="divide-y divide-border -mx-5">
+                  {thisWeek.map((p) => (
+                    <li key={p.id} className="px-5 py-3 flex items-center gap-4">
+                      <div className="w-14 shrink-0 text-center">
+                        <p className="text-xs text-text-muted">{format(parseISO(p.scheduledAt), "EEE")}</p>
+                        <p className="text-sm font-medium tabular-nums">{format(parseISO(p.scheduledAt), "HH:mm")}</p>
+                      </div>
+                      <p className="text-sm flex-1 min-w-0 truncate">{p.content.caption}</p>
+                      <span className="flex gap-1.5 text-text-muted">
+                        {p.platforms.map((pl) => (
+                          <PlatformIcon key={pl} platform={pl} />
+                        ))}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Card>
+
+            <Card className="p-5">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="font-medium">Drafts to review</h2>
+                <span className="text-sm text-text-muted tabular-nums">{drafts.length}</span>
+              </div>
+              {drafts.length === 0 ? (
+                <p className="text-sm text-text-muted">No drafts waiting.</p>
+              ) : (
+                <ul className="space-y-2">
+                  {drafts.slice(0, 5).map((p) => (
+                    <li key={p.id}>
+                      <Link href="/calendar" className="flex items-center gap-3 rounded-lg border border-border px-3 h-11 hover:border-text/30">
+                        <span className="text-sm truncate flex-1">{p.content.caption}</span>
+                        <ArrowRight size={14} className="text-text-muted shrink-0" />
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Card>
+          </div>
+
+          <div className="space-y-6">
+            {remaining > 0 && (
+              <Card className="p-5">
+                <h2 className="font-medium">Get set up</h2>
+                <p className="text-xs text-text-muted mt-0.5">{remaining} left</p>
+                <ul className="mt-4 space-y-1">
+                  {checklist.map((c) => (
+                    <li key={c.label}>
+                      <Link href={c.href} className="flex items-center gap-3 h-9 px-1 rounded-lg hover:bg-text/5">
+                        <span className={clsx("w-5 h-5 rounded-full border grid place-items-center shrink-0", c.done ? "bg-text border-text text-bg" : "border-border")}>
+                          {c.done && <Check size={12} strokeWidth={3} />}
+                        </span>
+                        <span className={clsx("text-sm", c.done && "text-text-muted line-through")}>{c.label}</span>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </Card>
             )}
 
-            {/* Stats */}
-            <div className="grid grid-cols-4 gap-4 mb-8 stagger">
-              {[
-                { label: "Brands", value: brands.length, icon: "✦", href: "/onboarding" },
-                { label: "Scheduled", value: scheduledPosts.length, icon: "📅", href: "/calendar" },
-                { label: "Published", value: publishedPosts.length, icon: "✅", href: "/calendar" },
-                { label: "Automations", value: activeRules.length, icon: "⚡", href: "/automation" },
-              ].map(({ label, value, icon, href }) => (
-                <Link key={label} href={href}>
-                  <Card
-                    hover
-                    className="p-5 animate-fade-up"
-                  >
-                    <div className="text-2xl mb-3">{icon}</div>
-                    <div className="text-3xl font-bold mb-0.5">{value}</div>
-                    <div className="text-xs text-text-muted font-medium uppercase tracking-wider">
-                      {label}
-                    </div>
-                  </Card>
+            <Card className="p-5">
+              <div className="flex items-center justify-between">
+                <h2 className="font-medium">Your brand</h2>
+                <Link href="/brand" className="text-sm text-text-muted hover:text-text">
+                  Edit
                 </Link>
-              ))}
-            </div>
-
-            <div className="grid grid-cols-3 gap-6">
-              {/* Upcoming posts */}
-              <div className="col-span-2">
-                <h2 className="font-semibold mb-4 flex items-center gap-2">
-                  <span>📅</span> Upcoming Posts
-                </h2>
-                {scheduledPosts.length === 0 ? (
-                  <EmptyState
-                    icon="📝"
-                    title="No scheduled posts"
-                    description="Create your first AI-generated post and schedule it."
-                    action={
-                      <Link href="/composer">
-                        <Button size="sm">Open Composer</Button>
-                      </Link>
-                    }
-                  />
-                ) : (
-                  <div className="space-y-3">
-                    {scheduledPosts.slice(0, 5).map((post) => (
-                      <Card key={post.id} className="p-4 flex items-start gap-4">
-                        <div className="w-10 h-10 rounded-xl bg-accent/10 flex items-center justify-center text-lg shrink-0">
-                          {PLATFORM_ICONS[post.platforms[0]] || "📱"}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm text-text line-clamp-2 mb-2">
-                            {post.content.caption}
-                          </p>
-                          <div className="flex items-center gap-2 flex-wrap">
-                            {post.platforms.map((p) => (
-                              <Chip key={p} variant="neutral" className="text-[11px]">
-                                {PLATFORM_ICONS[p]} {PLATFORM_LABELS[p as Platform]}
-                              </Chip>
-                            ))}
-                            <span className="text-[11px] text-text-muted ml-auto">
-                              {format(parseISO(post.scheduledAt), "MMM d, h:mm a")}
-                            </span>
-                          </div>
-                        </div>
-                      </Card>
-                    ))}
-                  </div>
-                )}
               </div>
-
-              {/* Sidebar: brand DNA + automations */}
-              <div className="space-y-6">
-                {/* Brand DNA quick view */}
-                {activeBrand && (
-                  <div>
-                    <h2 className="font-semibold mb-4 flex items-center gap-2">
-                      <span>✦</span> Brand DNA
-                    </h2>
-                    <Card className="p-4">
-                      <div className="flex gap-2 mb-3 flex-wrap">
-                        {activeBrand.dna.vibe.map((v) => (
-                          <Chip key={v} variant="accent" className="text-[11px]">
-                            {v}
-                          </Chip>
-                        ))}
-                      </div>
-                      <p className="text-xs text-text-muted mb-3">
-                        {activeBrand.dna.communication_tone}
-                      </p>
-                      <div className="flex gap-1.5">
-                        {Object.entries(activeBrand.dna.colors).map(([, hex]) => (
-                          <div
-                            key={hex}
-                            className="w-6 h-6 rounded-md border border-border"
-                            style={{ background: hex }}
-                          />
-                        ))}
-                      </div>
-                      <Link href="/onboarding" className="block mt-3">
-                        <Button variant="ghost" size="sm" className="w-full">
-                          Edit Brand DNA
-                        </Button>
-                      </Link>
-                    </Card>
-                  </div>
-                )}
-
-                {/* Automation rules */}
-                <div>
-                  <h2 className="font-semibold mb-4 flex items-center gap-2">
-                    <span>⚡</span> Automations
-                  </h2>
-                  {brandRules.length === 0 ? (
-                    <Card className="p-4 text-center">
-                      <p className="text-xs text-text-muted mb-3">No automations yet</p>
-                      <Link href="/automation">
-                        <Button variant="ghost" size="sm" className="w-full">
-                          Set Up Automation
-                        </Button>
-                      </Link>
-                    </Card>
-                  ) : (
-                    <div className="space-y-2">
-                      {brandRules.slice(0, 3).map((rule) => (
-                        <Card key={rule.id} className="p-3 flex items-center gap-3">
-                          <div
-                            className={`w-2 h-2 rounded-full shrink-0 ${
-                              rule.status === "active"
-                                ? "bg-success"
-                                : rule.status === "error"
-                                ? "bg-error"
-                                : "bg-text-muted"
-                            }`}
-                          />
-                          <div className="flex-1 min-w-0">
-                            <p className="text-xs font-medium truncate">{rule.name}</p>
-                            <p className="text-[11px] text-text-muted">{rule.postsGenerated} posts generated</p>
-                          </div>
-                        </Card>
-                      ))}
-                    </div>
-                  )}
-                </div>
+              <div className="grid grid-cols-4 rounded-lg overflow-hidden border border-border h-10 mt-4">
+                {colors.map((c, i) => (
+                  <span key={i} style={{ background: c }} />
+                ))}
               </div>
-            </div>
-          </>
-        )}
+              {brand.dna.one_liner && <p className="text-sm text-text-muted mt-4 leading-relaxed">{brand.dna.one_liner}</p>}
+              {brand.dna.vibe.length > 0 && <p className="text-xs text-text-muted mt-3">{brand.dna.vibe.slice(0, 4).join(" · ")}</p>}
+            </Card>
+          </div>
+        </div>
       </div>
     </AppShell>
   );

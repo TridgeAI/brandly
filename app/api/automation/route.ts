@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateText, parseJSON } from "@/lib/llm";
 import type { BrandDNA, GeneratedPost, TriggerConfig } from "@/lib/types";
-import { fetchRssFeed, fetchProductPageContent } from "../../lib/automation-utils"; // New import
+import { fetchRssFeed, fetchProductPageContent } from "@/lib/automation-utils";
+import { callN8n, n8nEnabled } from "@/lib/n8n";
 
 const SYSTEM = `You are an automated social media content generator.
 Generate content based on the provided trigger context and brand DNA.
@@ -15,6 +16,7 @@ export async function POST(req: NextRequest) {
       triggerConfig: TriggerConfig; // Pass the full trigger config now
       platforms: string[];
     } = await req.json();
+    if (n8nEnabled()) return callN8n("automation", body);
 
     const { brandDNA, triggerType, triggerConfig, platforms } = body;
 

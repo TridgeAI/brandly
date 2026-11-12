@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { generateText, parseJSON } from "@/lib/llm";
 import type { GeneratePostPayload, GeneratedPost } from "@/lib/types";
 import { CONTENT_TEMPLATES, PLATFORM_LIMITS } from "@/lib/templates";
+import { callN8n, n8nEnabled } from "@/lib/n8n";
+import { toPromptContext } from "@/lib/brand/projection";
 
 const SYSTEM = `You are an expert social media content strategist.
 You write deeply on-brand content that feels human, not AI-generated.
@@ -10,17 +12,18 @@ Return ONLY a JSON object — no markdown, no preamble.`;
 export async function POST(req: NextRequest) {
   try {
     const body: GeneratePostPayload = await req.json();
-    const { brandDNA, template, topic, platforms, tone, additionalContext } = body;
+    if (n8nEnabled()) return callN8n("generate-post", body);
+    const { brandDNA, brandModel, template, topic, platforms, tone, additionalContext } = body;
+    // The brand context is a stable prefix, so it is sent as cached context.
+    const brandContext = brandModel ? toPromptContext(brandModel) : `Brand DNA:
+${JSON.stringify(brandDNA, null, 2)}`;
 
     const templateConfig = CONTENT_TEMPLATES.find((t) => t.id === template);
     const platformLimitsList = platforms
       .map((p) => `${p}: ${PLATFORM_LIMITS[p].caption} chars`)
       .join(", ");
 
-    const userPrompt = `Brand DNA:
-${JSON.stringify(brandDNA, null, 2)}
-
-Content request:
+    const userPrompt = `Content request:
 - Template: ${templateConfig?.label} — ${templateConfig?.promptHint}
 - Topic/focus: ${topic || "general brand content"}
 - Platforms: ${platforms.join(", ")}
@@ -50,7 +53,7 @@ Rules:
 - Embed the brand's communication tone and vibe naturally
 - hashtags array should include the # symbol`;
 
-    const raw = await generateText(SYSTEM, userPrompt, 2000);
+    const raw = await generateText(SYSTEM, userPrompt, { task: "fast", maxTokens: 2000, cachedContext: brandContext });
     const post = parseJSON<GeneratedPost>(raw);
 
     if (!post) {

@@ -1,12 +1,13 @@
 "use client";
 import { useState } from "react";
+import { PlatformIcon, TemplateIcon, TriggerIcon } from "@/components/ui/icons";
 import AppShell from "@/components/layout/AppShell";
 import { useStore } from "@/lib/store";
 import { Button, Input, Textarea, Card, Chip, SectionLabel, PageHeader, EmptyState } from "@/components/ui";
 import PlatformPreview from "@/components/composer/PlatformPreview";
 import Link from "next/link";
 import type { GeneratedPost, Platform, TemplateCategory, ScheduledPost } from "@/lib/types";
-import { CONTENT_TEMPLATES, PLATFORM_ICONS, PLATFORM_LABELS } from "@/lib/templates";
+import { CONTENT_TEMPLATES, PLATFORM_LABELS } from "@/lib/templates";
 import { format, addDays } from "date-fns";
 
 const PLATFORMS: Platform[] = ["instagram", "facebook", "linkedin", "twitter"];
@@ -27,6 +28,35 @@ export default function ComposerPage() {
     format(addDays(new Date(), 1), "yyyy-MM-dd'T'HH:mm")
   );
   const [saved, setSaved] = useState(false);
+  const [imageAspect, setImageAspect] = useState("1:1");
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [imageLoading, setImageLoading] = useState(false);
+  const [imageError, setImageError] = useState<string | null>(null);
+  const [imageExpiresAt, setImageExpiresAt] = useState<string | null>(null);
+
+  const generateImage = async () => {
+    if (!post || !brand) return;
+    setImageLoading(true);
+    setImageError(null);
+    try {
+      const res = await fetch("/api/generate-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: post.imagePrompt, aspect: imageAspect, brandDNA: brand.dna }),
+      });
+      const data = await res.json();
+      if (data.imageUrl) {
+        setImageUrl(data.imageUrl);
+        setImageExpiresAt(data.expiresAt ?? null);
+        setSaved(false);
+      } else {
+        setImageError(data.error ?? `Image generation failed (HTTP ${res.status})`);
+      }
+    } catch (err) {
+      setImageError(err instanceof Error ? err.message : String(err));
+    }
+    setImageLoading(false);
+  };
 
   const togglePlatform = (p: Platform) => {
     setSelectedPlatforms((prev) =>
@@ -39,11 +69,15 @@ export default function ComposerPage() {
     setGenerating(true);
     setPost(null);
     setSaved(false);
+    setImageUrl(null);
+    setImageExpiresAt(null);
+    setImageError(null);
     const res = await fetch("/api/generate-post", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         brandDNA: brand.dna,
+        brandModel: brand.model,
         template: selectedTemplate,
         topic,
         platforms: selectedPlatforms,
@@ -66,6 +100,7 @@ export default function ComposerPage() {
       scheduledAt: new Date(scheduleDate).toISOString(),
       status,
       createdAt: new Date().toISOString(),
+      ...(imageUrl ? { mediaUrl: imageUrl } : {}),
     };
     addPost(scheduled);
     setSaved(true);
@@ -76,12 +111,11 @@ export default function ComposerPage() {
       <AppShell>
         <div className="p-8">
           <EmptyState
-            icon="✦"
             title="No brand selected"
-            description="Build your Brand DNA first — the composer uses it to generate on-brand content."
+            description="Set up your brand first. Brandly uses it to write posts that sound like you."
             action={
               <Link href="/onboarding">
-                <Button>Build Brand DNA →</Button>
+                <Button>Set up your brand</Button>
               </Link>
             }
           />
@@ -116,7 +150,7 @@ export default function ComposerPage() {
                         : "border-border text-text-muted hover:border-accent/30 hover:text-text"
                     }`}
                   >
-                    <span className="text-lg block mb-1">{t.icon}</span>
+                    <span className="block mb-1.5"><TemplateIcon id={t.id} /></span>
                     <span className="font-medium">{t.label}</span>
                   </button>
                 ))}
@@ -137,7 +171,7 @@ export default function ComposerPage() {
                         : "border-border text-text-muted hover:border-accent/30"
                     }`}
                   >
-                    <span>{PLATFORM_ICONS[p]}</span>
+                    <span><PlatformIcon platform={p} /></span>
                     {PLATFORM_LABELS[p]}
                   </button>
                 ))}
@@ -202,7 +236,7 @@ export default function ComposerPage() {
               disabled={selectedPlatforms.length === 0}
               onClick={generate}
             >
-              {generating ? "Generating…" : "✦ Generate Post"}
+              {generating ? "Writing…" : "Write post"}
             </Button>
           </div>
 
@@ -210,25 +244,23 @@ export default function ComposerPage() {
           <div className="col-span-3 space-y-5">
             {!post && !generating && (
               <div className="flex flex-col items-center justify-center h-full min-h-[500px] text-center gap-4 border-2 border-dashed border-border rounded-2xl">
-                <div className="text-5xl opacity-30">✏️</div>
-                <p className="font-semibold text-text">Your generated post will appear here</p>
+                <p className="font-medium text-text">Your post will appear here</p>
                 <p className="text-sm text-text-muted max-w-xs">
-                  Select a template, choose platforms, and hit Generate.
+                  Pick what it&apos;s about and where it&apos;s going, then press Write post.
                 </p>
               </div>
             )}
 
             {generating && (
               <div className="flex flex-col items-center justify-center h-full min-h-[500px] gap-4">
-                <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-accent to-accent-light flex items-center justify-center text-xl animate-spin-slow">
-                  ✦
+                <div className="w-full max-w-md space-y-3" aria-hidden>
+                  <div className="aspect-square rounded-xl bg-text/5 animate-pulse" />
+                  <div className="h-3 rounded bg-text/5 animate-pulse" />
+                  <div className="h-3 w-2/3 rounded bg-text/5 animate-pulse" />
                 </div>
-                <p className="text-text-muted">Writing on-brand content…</p>
-                <div className="flex flex-col gap-2 text-xs text-text-muted text-center">
-                  <p>✦ Applying {brand.name} Brand DNA</p>
-                  <p>✦ Adapting for {selectedPlatforms.join(", ")}</p>
-                  <p>✦ Generating image prompt & CTA</p>
-                </div>
+                <p className="text-sm text-text-muted">
+                  Writing for {selectedPlatforms.join(", ")} in {brand.name}&apos;s voice…
+                </p>
               </div>
             )}
 
@@ -240,6 +272,7 @@ export default function ComposerPage() {
                   platforms={selectedPlatforms}
                   brandDNA={brand.dna}
                   igHandle={brand.sources.instagram}
+                  imageUrl={imageUrl}
                 />
 
                 {/* All captions */}
@@ -250,7 +283,7 @@ export default function ComposerPage() {
                       {selectedPlatforms.map((p) => (
                         <div key={p}>
                           <p className="text-xs font-semibold text-text-muted mb-1.5">
-                            {PLATFORM_ICONS[p]} {PLATFORM_LABELS[p]}
+                            <PlatformIcon platform={p} /> {PLATFORM_LABELS[p]}
                           </p>
                           <p className="text-sm leading-relaxed bg-surface p-3 rounded-xl">
                             {post.platformVariants?.[p] ?? post.caption}
@@ -289,9 +322,36 @@ export default function ComposerPage() {
                 {/* Image prompt */}
                 <Card className="p-5">
                   <SectionLabel>AI Image Generation Prompt</SectionLabel>
-                  <p className="text-sm text-text-muted leading-relaxed bg-surface p-3 rounded-xl">
+                  <p className="text-sm text-text-muted leading-relaxed bg-surface p-3 rounded-xl mb-4">
                     {post.imagePrompt}
                   </p>
+                  <div className="flex gap-2 items-center flex-wrap">
+                    {["1:1", "4:5", "16:9", "9:16"].map((a) => (
+                      <button
+                        key={a}
+                        onClick={() => setImageAspect(a)}
+                        className={`text-xs px-3 py-1.5 rounded-full border transition-all ${
+                          imageAspect === a
+                            ? "bg-accent/10 border-accent/40 text-accent-light"
+                            : "border-border text-text-muted hover:border-accent/30 hover:text-text"
+                        }`}
+                      >
+                        {a}
+                      </button>
+                    ))}
+                    <Button size="sm" className="ml-auto" loading={imageLoading} onClick={generateImage}>
+                      {imageLoading ? "Making image…" : imageUrl ? "New image" : "Make an image"}
+                    </Button>
+                  </div>
+                  {imageError && <p className="text-xs text-error mt-3">{imageError}</p>}
+                  {imageUrl && (
+                    <p className="text-[11px] text-text-muted mt-3">
+                      {imageExpiresAt
+                        ? "This image link expires in 24 hours. "
+                        : ""}
+                      The image is saved with the post when you schedule or save it.
+                    </p>
+                  )}
                 </Card>
 
                 {/* Schedule */}
