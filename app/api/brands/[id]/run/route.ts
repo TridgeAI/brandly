@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { PIPELINES, runStages, type PipelineId } from "@/lib/brand/pipelines";
 import { friendlyError } from "@/lib/brand/jobs";
 import { emptyModel, type BrandModel } from "@/lib/brand/model";
+import { optionalSession } from "@/lib/db/session";
+import { withLlmContext } from "@/lib/llm-log";
 
 // Long enough for a website read + AI synthesis; well inside Vercel's limits.
 export const maxDuration = 120;
@@ -25,6 +27,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   if (!(pipeline in PIPELINES)) return NextResponse.json({ error: `Unknown pipeline "${pipeline}"` }, { status: 400 });
 
   const model = body.model ?? emptyModel(body.name?.trim() || "Untitled brand", pipeline, id);
+  // Resolve the user before streaming so every LLM call in the run is logged against them.
+  const session = await optionalSession();
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
@@ -33,7 +37,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       // Keep the connection alive while a slow model is thinking.
       const ping = setInterval(() => send({ type: "ping" }), 10_000);
       try {
-        const result = await runStages(PIPELINES[pipeline], model, body.input ?? {}, (finding) => send({ type: "finding", finding }));
+        const result = await withLlmContext(
+          { feature: `pipeline:${pipeline}`, workspaceId: session?.workspaceId, userId: session?.userId, brandId: id },
+          () => runStages(PIPELINES[pipeline], model, body.input ?? {}, (finding) => send({ type: "finding", finding }))
+        );
         send({ type: "done", result });
       } catch (err) {
         console.error(`[run ${pipeline}]`, err);

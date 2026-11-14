@@ -8,7 +8,8 @@ import AppShell from "@/components/layout/AppShell";
 import { Button, Input, Textarea } from "@/components/ui";
 import { ChipGroup, ChoiceCard, LiveFindings, OnboardingShell, Question, TierCards } from "@/components/onboarding/kit";
 import { BrandPostPreview, PaletteStrip } from "@/components/brand/BrandPreview";
-import { useStore } from "@/lib/store";
+import { afterSync, useStore } from "@/lib/store";
+import { track } from "@/lib/track";
 import { emptyModel, AGE_GROUPS, MOMENTS, MOTIVATIONS, type Affluence, type AgeGroup, type BrandModel, type CityTier, type Gender, type Moment, type Motivation } from "@/lib/brand/model";
 import { mergePatch } from "@/lib/brand/merge";
 import { AFFLUENCE_OPTIONS, AGE_LABELS, CITY_TIER_LABELS, GENDER_OPTIONS, LANGUAGE_OPTIONS, MOMENT_LABELS, MOTIVATION_LABELS } from "@/lib/brand/audience";
@@ -80,6 +81,10 @@ export default function OnboardingPage() {
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => () => abortRef.current?.abort(), []);
+  // Funnel: which step people reach, and on which door.
+  useEffect(() => {
+    track("onboarding_step", { props: { step, door } });
+  }, [step, door]);
 
   const set = <K extends keyof Answers>(k: K, v: Answers[K]) => setAnswers((a) => ({ ...a, [k]: v }));
 
@@ -144,11 +149,15 @@ export default function OnboardingPage() {
         }));
         setStep("audience");
       } else {
-        saveBrandModel(result.model, {
-          website: websiteUrl.trim() || undefined,
-          instagram: igHandle.trim() || undefined,
-          pdfName: pdf?.name,
-        });
+        saveBrandModel(
+          result.model,
+          {
+            website: websiteUrl.trim() || undefined,
+            instagram: igHandle.trim() || undefined,
+            pdfName: pdf?.name,
+          },
+          { source: "stage", stageId: "pipeline:analyse" }
+        );
         router.push("/brand?welcome=1");
       }
     } catch (err) {
@@ -212,7 +221,17 @@ export default function OnboardingPage() {
       const withAnswers = modelFromAnswers();
       const chosen = mergePatch(withAnswers, directionToPatch(d), { source: "user", confidence: 1 }).model;
       const result = await runPipeline("build", chosen, {}, setFindings);
-      saveBrandModel(result.model, door === "refine" ? { website: websiteUrl.trim() || undefined, instagram: igHandle.trim() || undefined } : {});
+      saveBrandModel(result.model, door === "refine" ? { website: websiteUrl.trim() || undefined, instagram: igHandle.trim() || undefined } : {}, { source: "build" });
+      // Every direction shown + the one picked: preference data for improving directions later.
+      const brandId = result.model.id;
+      afterSync(brandId).then(() =>
+        fetch("/api/build-sessions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ brandId, answers, directions, selectedIndex: directions?.findIndex((x) => x.id === d.id) ?? null }),
+          keepalive: true,
+        }).catch(() => undefined)
+      );
       router.push("/brand?welcome=1");
     } catch (err) {
       setRunning(false);

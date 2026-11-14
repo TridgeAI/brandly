@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "db:migrate": "node scripts/migrate.mjs",
+    "db:test": "node scripts/test-rls.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
@@ -17,6 +19,8 @@
     "@radix-ui/react-tabs": "^1.1.2",
     "@radix-ui/react-toast": "^1.2.4",
     "@radix-ui/react-tooltip": "^1.1.6",
+    "@supabase/ssr": "^0.12.7",
+    "@supabase/supabase-js": "^2.119.0",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
     "framer-motion": "^11.18.2",
@@ -28,14 +32,17 @@
     "react-dom": "^19.0.0",
     "react-dropzone": "^14.3.5",
     "rss-parser": "^3.13.0",
+    "server-only": "^0.0.1",
     "zod": "^3.24.1",
     "zustand": "^5.0.3"
   },
   "devDependencies": {
     "@types/node": "^20",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "autoprefixer": "^10.4.27",
+    "pg": "^8.23.1",
     "postcss": "^8",
     "tailwindcss": "^3.4.1",
     "typescript": "5.9.3"

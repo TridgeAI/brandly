@@ -3,7 +3,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import clsx from "clsx";
-import { CalendarDays, Check, ChevronsUpDown, Home, Palette, PenLine, Plus, Workflow } from "lucide-react";
+import { CalendarDays, Check, ChevronsUpDown, Home, LogOut, Palette, PenLine, Plus, Workflow } from "lucide-react";
 import { useStore } from "@/lib/store";
 
 export const NAV = [
@@ -102,7 +102,63 @@ export default function Sidebar() {
           );
         })}
       </nav>
+      <AccountMenu />
     </aside>
+  );
+}
+
+/** Signed-in user, workspace, data-use consent and sign out. */
+function AccountMenu() {
+  const account = useStore((s) => s.account);
+  const [open, setOpen] = useState(false);
+  const [optIn, setOptIn] = useState(account?.workspace.data_training_opt_in ?? false);
+  if (!account) return null;
+  const label = account.user.name || account.user.email || "Account";
+
+  const toggleOptIn = async () => {
+    const next = !optIn;
+    setOptIn(next);
+    const res = await fetch("/api/workspace", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dataTrainingOptIn: next }),
+    }).catch(() => null);
+    if (!res?.ok) setOptIn(!next);
+  };
+
+  return (
+    <div className="p-3 border-t border-border relative">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="w-full flex items-center gap-2.5 px-2 h-11 rounded-lg hover:bg-text/5 text-left"
+      >
+        <span className="w-7 h-7 rounded-full bg-text/10 grid place-items-center text-xs font-semibold uppercase shrink-0">{label.slice(0, 1)}</span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm font-medium">{label}</span>
+          <span className="block truncate text-xs text-text-muted">{account.workspace.name}</span>
+        </span>
+        <ChevronsUpDown size={14} className="text-text-muted" />
+      </button>
+      {open && (
+        <div className="absolute left-3 right-3 bottom-[60px] z-20 bg-card border border-border rounded-xl shadow-pop p-1 animate-fade-in">
+          {account.user.email && <p className="px-2 pt-1.5 pb-1 text-xs text-text-muted truncate">{account.user.email}</p>}
+          <label className="flex items-start gap-2 px-2 py-2 rounded-lg hover:bg-text/5 text-sm cursor-pointer">
+            <input type="checkbox" className="mt-0.5" checked={optIn} onChange={toggleOptIn} />
+            <span>
+              Help improve Brandly
+              <span className="block text-xs text-text-muted">Let us use this workspace&apos;s edits and ratings to improve the AI.</span>
+            </span>
+          </label>
+          <div className="h-px bg-border my-1" />
+          <form action="/auth/signout" method="post">
+            <button type="submit" className="w-full flex items-center gap-2.5 px-2 h-9 rounded-lg hover:bg-text/5 text-sm text-left">
+              <LogOut size={14} /> Sign out
+            </button>
+          </form>
+        </div>
+      )}
+    </div>
   );
 }
 

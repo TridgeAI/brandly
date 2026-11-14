@@ -5,6 +5,7 @@ import { generateText, parseJSON } from "@/lib/llm";
 import type { BrandDNA, GeneratedPost, TriggerConfig } from "@/lib/types";
 import { fetchRssFeed, fetchProductPageContent } from "@/lib/automation-utils";
 import { callN8n, n8nEnabled } from "@/lib/n8n";
+import { llmScope } from "@/lib/db/llm-scope";
 
 const SYSTEM = `You are an automated social media content generator.
 Generate content based on the provided trigger context and brand DNA.
@@ -63,7 +64,7 @@ Auto-generate a post and return:
   "platformVariants": {}
 }`;
 
-    const raw = await generateText(SYSTEM, userPrompt, 1500);
+    const raw = await llmScope("automation", { promptVersion: "automation@1" }, () => generateText(SYSTEM, userPrompt, 1500));
     const post = parseJSON<GeneratedPost>(raw);
 
     if (!post) {

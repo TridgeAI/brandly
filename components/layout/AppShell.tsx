@@ -1,22 +1,50 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import Sidebar, { MobileNav } from "@/components/layout/Sidebar";
+import ImportLocalData from "@/components/layout/ImportLocalData";
+import { Button, Spinner } from "@/components/ui";
+import { useStore } from "@/lib/store";
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
-  // Brands, posts and rules live in localStorage (Zustand persist), which the server can't see.
-  // Render the app only after mounting in the browser so server and client HTML match
-  // (avoids the hydration error and the brief "No brand selected" flash).
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
+  // Brands, posts and rules load from the database once per visit.
+  // Pages render after that, so they never flash "No brand selected".
+  const { hydrated, loadError, hydrate, syncError, clearSyncError } = useStore();
+  useEffect(() => {
+    if (!hydrated) hydrate();
+  }, [hydrated, hydrate]);
 
-  if (!mounted) {
-    return <div className="flex h-screen overflow-hidden bg-bg" />;
+  if (!hydrated) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-bg">
+        {loadError ? (
+          <div className="max-w-sm text-center space-y-3 px-4">
+            <p className="text-sm text-text">{loadError}</p>
+            <Button size="sm" variant="secondary" onClick={() => hydrate()}>
+              Try again
+            </Button>
+          </div>
+        ) : (
+          <Spinner size={20} />
+        )}
+      </div>
+    );
   }
 
   return (
     <div className="flex h-screen overflow-hidden bg-bg">
       <Sidebar />
-      <main className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden pb-16 md:pb-0">{children}</main>
+      <main className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden pb-16 md:pb-0">
+        {syncError && (
+          <div role="alert" className="mx-4 mt-4 md:mx-8 rounded-xl border border-error/30 bg-error/5 px-4 py-2.5 text-sm text-error flex items-center gap-3">
+            <span className="flex-1">{syncError}</span>
+            <button className="text-xs underline" onClick={clearSyncError}>
+              Dismiss
+            </button>
+          </div>
+        )}
+        <ImportLocalData />
+        {children}
+      </main>
       <MobileNav />
     </div>
   );

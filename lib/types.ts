@@ -65,6 +65,8 @@ export interface ScheduledPost {
   createdAt: string;
   mediaUrl?: string;
   notes?: string;
+  /** llm_calls.id of the generation this post came from (for feedback + quality tracking). */
+  generationId?: string;
 }
 
 // ── Content Templates ──────────────────────────────────────────────────────

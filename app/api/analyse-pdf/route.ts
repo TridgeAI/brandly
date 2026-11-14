@@ -4,6 +4,7 @@ export const maxDuration = 60;
 import { analyseImages, parseJSON } from "@/lib/llm";
 import type { AnalysePdfPayload } from "@/lib/types";
 import { callN8n, n8nEnabled } from "@/lib/n8n";
+import { llmScope } from "@/lib/db/llm-scope";
 
 const PDF_VISION_PROMPT = `These are rasterised pages from a brand PDF catalogue.
 Each page is rendered at full resolution — ALL visual content is visible:
@@ -39,7 +40,7 @@ export async function POST(req: NextRequest) {
     const pagesToAnalyse = pages.slice(0, 8);
 
     const prompt = `Brand name: ${brandName}\n\n${PDF_VISION_PROMPT}`;
-    const raw = await analyseImages(pagesToAnalyse, prompt, 1200);
+    const raw = await llmScope("analyse-pdf", {}, () => analyseImages(pagesToAnalyse, prompt, 1200));
     const insights = parseJSON<Record<string, unknown>>(raw);
 
     if (!insights) {

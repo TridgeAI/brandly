@@ -218,7 +218,7 @@ export type ModelPatch = DeepPartial<Pick<BrandModel, LayerKey | "name">>;
 const color = (hex: string): ColorToken => ({ $type: "color", $value: hex });
 const font = (name: string): FontToken => ({ $type: "fontFamily", $value: name });
 
-export function emptyModel(name: string, mode: BrandMode, id = `brand_${Date.now()}`): BrandModel {
+export function emptyModel(name: string, mode: BrandMode, id: string = crypto.randomUUID()): BrandModel {
   const now = new Date().toISOString();
   return {
     id,

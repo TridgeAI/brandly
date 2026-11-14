@@ -6,6 +6,11 @@ import type { GeneratePostPayload, GeneratedPost } from "@/lib/types";
 import { CONTENT_TEMPLATES, PLATFORM_LIMITS } from "@/lib/templates";
 import { callN8n, n8nEnabled } from "@/lib/n8n";
 import { toPromptContext } from "@/lib/brand/projection";
+import { llmScope } from "@/lib/db/llm-scope";
+import { lastLlmCallId } from "@/lib/llm-log";
+
+// Bump when the prompt changes, so quality can be compared across prompt versions.
+const PROMPT_VERSION = "generate-post@1";
 
 const SYSTEM = `You are an expert social media content strategist.
 You write deeply on-brand content that feels human, not AI-generated.
@@ -55,7 +60,10 @@ Rules:
 - Embed the brand's communication tone and vibe naturally
 - hashtags array should include the # symbol`;
 
-    const raw = await generateText(SYSTEM, userPrompt, { task: "fast", maxTokens: 2000, cachedContext: brandContext });
+    const { raw, generationId } = await llmScope("generate-post", { brandId: brandModel?.id, promptVersion: PROMPT_VERSION }, async () => {
+      const text = await generateText(SYSTEM, userPrompt, { task: "fast", maxTokens: 2000, cachedContext: brandContext });
+      return { raw: text, generationId: lastLlmCallId() };
+    });
     const post = parseJSON<GeneratedPost>(raw);
 
     if (!post) {
@@ -65,7 +73,7 @@ Rules:
       );
     }
 
-    return NextResponse.json({ post });
+    return NextResponse.json({ post, generationId });
   } catch (err) {
     console.error("[generate-post]", err);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });

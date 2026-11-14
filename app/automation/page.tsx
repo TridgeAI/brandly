@@ -73,7 +73,7 @@ export default function AutomationPage() {
     }
 
     const rule: AutomationRule = {
-      id: `rule_${Date.now()}`,
+      id: crypto.randomUUID(),
       brandId: brand.id,
       name: ruleName,
       trigger,
@@ -121,7 +121,7 @@ export default function AutomationPage() {
       } else {
         // Save the generated post as a draft so it shows up in the Calendar
         addPost({
-          id: `post_${Date.now()}`,
+          id: crypto.randomUUID(),
           brandId: brand.id,
           content: data.post,
           platforms: rule.platforms,

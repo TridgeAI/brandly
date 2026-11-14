@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import type { z, ZodTypeAny } from "zod";
+import { currentLlmContext, persistRecord, startRecord, hashText, type LlmCallRecord } from "./llm-log";
 
 // Singleton clients, instantiated once per server process
 const anthropicClient = process.env.ANTHROPIC_API_KEY
@@ -10,6 +11,17 @@ const geminiClient = process.env.GEMINI_API_KEY ? new GoogleGenerativeAI(process
 const groqKey = process.env.GROQ_API_KEY || null;
 
 type Provider = "claude" | "groq" | "gemini";
+
+interface Usage {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+}
+interface LlmReply {
+  text: string;
+  usage?: Usage;
+}
 
 // ── Model routing ──────────────────────────────────────────────────────────
 // One config, keyed by kind of task. Override any list with env vars (comma-separated).
@@ -75,7 +87,7 @@ const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const hasKey = (p: Provider) => (p === "claude" ? !!anthropicClient : p === "groq" ? !!groqKey : !!geminiClient);
 
-async function claudeText(system: string, user: string, model: string, maxTokens: number, cachedContext?: string) {
+async function claudeText(system: string, user: string, model: string, maxTokens: number, cachedContext?: string): Promise<LlmReply> {
   if (!anthropicClient) throw new Error("ANTHROPIC_API_KEY is missing.");
   const systemBlocks: Anthropic.TextBlockParam[] = [{ type: "text", text: system }];
   if (cachedContext) systemBlocks.push({ type: "text", text: cachedContext, cache_control: { type: "ephemeral" } });
@@ -84,11 +96,11 @@ async function claudeText(system: string, user: string, model: string, maxTokens
     { timeout: REQUEST_TIMEOUT_MS }
   );
   logUsage(model, msg.usage);
-  return msg.content.map((b) => (b.type === "text" ? b.text : "")).join("");
+  return { text: msg.content.map((b) => (b.type === "text" ? b.text : "")).join(""), usage: claudeUsage(msg.usage) };
 }
 
 /** Groq exposes an OpenAI-compatible API, so no SDK is needed. */
-async function groqText(system: string, user: string, model: string, maxTokens: number, cachedContext?: string, json = false) {
+async function groqText(system: string, user: string, model: string, maxTokens: number, cachedContext?: string, json = false): Promise<LlmReply> {
   if (!groqKey) throw new Error("GROQ_API_KEY is missing.");
   const isGptOss = model.startsWith("openai/gpt-oss");
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -114,10 +126,15 @@ async function groqText(system: string, user: string, model: string, maxTokens: 
   if (process.env.LOG_LLM_USAGE === "1" && data.usage) {
     console.log(`[LLM usage] ${model} in=${data.usage.prompt_tokens} out=${data.usage.completion_tokens}`);
   }
-  return (data.choices?.[0]?.message?.content as string | undefined) ?? "";
+  return {
+    text: (data.choices?.[0]?.message?.content as string | undefined) ?? "",
+    usage: data.usage
+      ? { input: data.usage.prompt_tokens, output: data.usage.completion_tokens, cacheRead: data.usage.prompt_tokens_details?.cached_tokens }
+      : undefined,
+  };
 }
 
-async function geminiText(system: string, user: string, model: string, maxTokens: number, cachedContext?: string, json = false) {
+async function geminiText(system: string, user: string, model: string, maxTokens: number, cachedContext?: string, json = false): Promise<LlmReply> {
   if (!geminiClient) throw new Error("GEMINI_API_KEY is missing.");
   const m = geminiClient.getGenerativeModel(
     {
@@ -129,7 +146,7 @@ async function geminiText(system: string, user: string, model: string, maxTokens
     { timeout: REQUEST_TIMEOUT_MS }
   );
   const result = await m.generateContent(user);
-  return result.response.text();
+  return { text: result.response.text(), usage: geminiUsage(result.response.usageMetadata) };
 }
 
 function order(task: LlmTask): Provider[] {
@@ -145,15 +162,36 @@ function order(task: LlmTask): Provider[] {
   return usable.length ? usable : configured;
 }
 
-/** Tries each provider and each of its models; one quick retry when a model is busy. */
-async function withFallback<T>(task: LlmTask, call: (provider: Provider, model: string) => Promise<T>): Promise<T> {
+/**
+ * Tries each provider and each of its models; one quick retry when a model is busy.
+ * The whole attempt chain is recorded as one `llm_calls` row (see lib/llm-log.ts).
+ */
+async function withFallback(task: LlmTask, rec: LlmCallRecord, call: (provider: Provider, model: string) => Promise<LlmReply>): Promise<string> {
   let lastError: unknown;
+  const tried: string[] = [];
+  const started = Date.now();
+  const finish = (fields: Partial<LlmCallRecord>) => {
+    Object.assign(rec, fields, { latency_ms: Date.now() - started, attempts: tried.length || 1 });
+    void persistRecord(rec);
+  };
   for (const provider of order(task)) {
     for (const model of MODELS[task][provider]) {
       let moveOn = false;
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
-          return await call(provider, model);
+          tried.push(`${provider}/${model}`);
+          const reply = await call(provider, model);
+          finish({
+            provider,
+            model,
+            output: reply.text,
+            input_tokens: reply.usage?.input,
+            output_tokens: reply.usage?.output,
+            cache_read_tokens: reply.usage?.cacheRead,
+            cache_write_tokens: reply.usage?.cacheWrite,
+            fallback_from: tried.length > 1 ? tried.slice(0, -1).join(",") : undefined,
+          });
+          return reply.text;
         } catch (err) {
           lastError = err;
           console.warn(`[LLM] ${provider}/${model} (${task}) failed:`, msgOf(err).slice(0, 200));
@@ -173,6 +211,7 @@ async function withFallback<T>(task: LlmTask, call: (provider: Provider, model: 
       if (!moveOn) break; // e.g. a bad request: try the next provider instead of the next model
     }
   }
+  finish({ fallback_from: tried.join(","), error: msgOf(lastError).slice(0, 1000) });
   throw lastError instanceof Error ? lastError : new Error("LLM generation failed");
 }
 
@@ -181,7 +220,13 @@ export async function generateText(system: string, user: string, maxTokensOrOpts
   const opts: GenerateOptions = typeof maxTokensOrOpts === "number" ? { maxTokens: maxTokensOrOpts } : maxTokensOrOpts;
   const task = opts.task ?? "fast";
   const maxTokens = opts.maxTokens ?? 1500;
-  return withFallback(task, (provider, model) =>
+  const rec = startRecord(
+    task,
+    // The brand context is large and the same across calls; its hash ties the call to a brand version.
+    { system, user, cachedContextHash: opts.cachedContext ? hashText(opts.cachedContext) : undefined },
+    system
+  );
+  return withFallback(task, rec, (provider, model) =>
     provider === "claude"
       ? claudeText(system, user, model, maxTokens, opts.cachedContext)
       : provider === "groq"
@@ -206,6 +251,8 @@ export async function generateStructured<S extends ZodTypeAny>(
     const raw = await generateText(fullSystem, prompt, { ...opts, json: true });
     const parsed = parseJSON<unknown>(raw);
     const result = schema.safeParse(parsed);
+    const rec = currentLlmContext()?.calls.at(-1);
+    if (rec) rec.parsed_ok = result.success;
     if (result.success) return result.data as z.output<S>;
     const problem = parsed === null ? "The reply was not valid JSON." : result.error.issues.slice(0, 6).map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
     console.warn(`[LLM] structured output invalid (attempt ${attempt + 1}): ${problem}`);
@@ -216,14 +263,16 @@ export async function generateStructured<S extends ZodTypeAny>(
 
 // ── Vision ─────────────────────────────────────────────────────────────────
 export async function analyseImages(base64Images: string[], prompt: string, maxTokens = 1500): Promise<string> {
-  return withFallback("vision", async (provider, model) => {
+  // Images are not stored (size + privacy); only the prompt and how many were sent.
+  const rec = startRecord("vision", { prompt, images: base64Images.length });
+  return withFallback("vision", rec, async (provider, model) => {
     if (provider === "gemini") {
       const m = geminiClient!.getGenerativeModel({ model, generationConfig: { maxOutputTokens: maxTokens + 2000 } }, { timeout: REQUEST_TIMEOUT_MS });
       const res = await m.generateContent([
         ...base64Images.map((data) => ({ inlineData: { mimeType: "image/jpeg", data } })),
         { text: prompt },
       ]);
-      return res.response.text();
+      return { text: res.response.text(), usage: geminiUsage(res.response.usageMetadata) };
     }
     const content: Anthropic.MessageParam["content"] = [
       ...base64Images.map(
@@ -233,7 +282,7 @@ export async function analyseImages(base64Images: string[], prompt: string, maxT
     ];
     const msg = await anthropicClient!.messages.create({ model, max_tokens: maxTokens, messages: [{ role: "user", content }] }, { timeout: REQUEST_TIMEOUT_MS });
     logUsage(model, msg.usage);
-    return msg.content.map((b) => (b.type === "text" ? b.text : "")).join("");
+    return { text: msg.content.map((b) => (b.type === "text" ? b.text : "")).join(""), usage: claudeUsage(msg.usage) };
   });
 }
 
@@ -263,4 +312,17 @@ function logUsage(model: string, usage: Anthropic.Usage | undefined) {
   console.log(
     `[LLM usage] ${model} in=${usage.input_tokens} out=${usage.output_tokens} cache_read=${usage.cache_read_input_tokens ?? 0} cache_write=${usage.cache_creation_input_tokens ?? 0}`
   );
+}
+
+function claudeUsage(u: Anthropic.Usage | undefined): Usage | undefined {
+  if (!u) return undefined;
+  const cacheRead = u.cache_read_input_tokens ?? 0;
+  const cacheWrite = u.cache_creation_input_tokens ?? 0;
+  // Anthropic reports uncached input separately; store the total so costs compare across providers.
+  return { input: u.input_tokens + cacheRead + cacheWrite, output: u.output_tokens, cacheRead, cacheWrite };
+}
+
+function geminiUsage(u: { promptTokenCount?: number; candidatesTokenCount?: number; cachedContentTokenCount?: number } | undefined): Usage | undefined {
+  if (!u) return undefined;
+  return { input: u.promptTokenCount, output: u.candidatesTokenCount, cacheRead: u.cachedContentTokenCount };
 }

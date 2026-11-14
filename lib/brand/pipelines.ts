@@ -7,6 +7,7 @@ import { validateStage } from "./stages/validate";
 import { directionsStage } from "./stages/directions";
 import type { Finding, StageDefinition } from "./stages/types";
 import type { Compliance } from "./model";
+import { withFeature } from "../llm-log";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const STAGES: Record<string, StageDefinition<any>> = {
@@ -59,7 +60,7 @@ export async function runStages(
   for (const id of stageIds) {
     const stage = STAGES[id];
     if (!stage) throw new Error(`Unknown stage "${id}"`);
-    const result = await stage.run(model, carry, { report });
+    const result = await withFeature(`stage:${id}`, () => stage.run(model, carry, { report }));
     for (const { patch, options } of result.patches) {
       const merged = mergePatch(model, patch, options);
       model = merged.model;

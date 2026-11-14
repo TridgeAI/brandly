@@ -9,6 +9,9 @@ import Link from "next/link";
 import type { GeneratedPost, Platform, TemplateCategory, ScheduledPost } from "@/lib/types";
 import { CONTENT_TEMPLATES, PLATFORM_LABELS } from "@/lib/templates";
 import { format, addDays } from "date-fns";
+import { sendFeedback, track } from "@/lib/track";
+
+const BAD_REASONS = ["Off-brand", "Wrong tone", "Too long", "Too generic", "Wrong facts"];
 
 const PLATFORMS: Platform[] = ["instagram", "facebook", "linkedin", "twitter"];
 const TONES = ["Brand default", "Witty & playful", "Professional", "Inspirational", "Educational", "Urgent"];
@@ -24,6 +27,11 @@ export default function ComposerPage() {
   const [additionalContext, setAdditionalContext] = useState("");
   const [generating, setGenerating] = useState(false);
   const [post, setPost] = useState<GeneratedPost | null>(null);
+  const [generationId, setGenerationId] = useState<string | null>(null);
+  const [rating, setRating] = useState<1 | -1 | null>(null);
+  const [reasons, setReasons] = useState<string[]>([]);
+  const [feedbackSent, setFeedbackSent] = useState(false);
+  const [genError, setGenError] = useState<string | null>(null);
   const [scheduleDate, setScheduleDate] = useState(
     format(addDays(new Date(), 1), "yyyy-MM-dd'T'HH:mm")
   );
@@ -46,6 +54,7 @@ export default function ComposerPage() {
       });
       const data = await res.json();
       if (data.imageUrl) {
+        if (generationId) track("image_generated", { generationId, props: { aspect: imageAspect } });
         setImageUrl(data.imageUrl);
         setImageExpiresAt(data.expiresAt ?? null);
         setSaved(false);
@@ -66,7 +75,13 @@ export default function ComposerPage() {
 
   const generate = async () => {
     if (!brand || selectedPlatforms.length === 0) return;
+    // Asking again for the same request means the last one wasn't good enough.
+    if (post && generationId && !saved) track("regenerated", { generationId });
     setGenerating(true);
+    setGenError(null);
+    setRating(null);
+    setReasons([]);
+    setFeedbackSent(false);
     setPost(null);
     setSaved(false);
     setImageUrl(null);
@@ -85,24 +100,27 @@ export default function ComposerPage() {
         additionalContext,
       }),
     });
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
     setPost(data.post ?? null);
+    setGenerationId(data.generationId ?? null);
+    if (!data.post) setGenError(data.error ?? "Couldn't write a post. Please try again.");
     setGenerating(false);
   };
 
   const schedulePost = (status: "draft" | "scheduled") => {
     if (!post || !brand) return;
     const scheduled: ScheduledPost = {
-      id: `post_${Date.now()}`,
+      id: crypto.randomUUID(),
       brandId: brand.id,
       content: post,
+      generationId: generationId ?? undefined,
       platforms: selectedPlatforms,
       scheduledAt: new Date(scheduleDate).toISOString(),
       status,
       createdAt: new Date().toISOString(),
       ...(imageUrl ? { mediaUrl: imageUrl } : {}),
     };
-    addPost(scheduled);
+    addPost(scheduled, { template: selectedTemplate, topic: topic || undefined });
     setSaved(true);
   };
 
@@ -248,6 +266,7 @@ export default function ComposerPage() {
                 <p className="text-sm text-text-muted max-w-xs">
                   Pick what it&apos;s about and where it&apos;s going, then press Write post.
                 </p>
+                {genError && <p className="text-sm text-error max-w-xs">{genError}</p>}
               </div>
             )}
 
@@ -377,6 +396,49 @@ export default function ComposerPage() {
                     </div>
                   </div>
                 </Card>
+
+                {/* Feedback */}
+                {generationId && (
+                  <Card className="p-5">
+                    {feedbackSent ? (
+                      <p className="text-sm text-text-muted">Thanks. This helps Brandly write better posts for you.</p>
+                    ) : (
+                      <>
+                        <div className="flex items-center gap-3">
+                          <span className="text-sm flex-1">Is this post on-brand?</span>
+                          <Button size="sm" variant={rating === 1 ? "primary" : "secondary"} aria-pressed={rating === 1} onClick={() => {
+                            setRating(1);
+                            sendFeedback({ generationId, rating: 1 }).then(() => setFeedbackSent(true)).catch(() => undefined);
+                          }}>
+                            Yes
+                          </Button>
+                          <Button size="sm" variant={rating === -1 ? "primary" : "secondary"} aria-pressed={rating === -1} onClick={() => setRating(-1)}>
+                            Not quite
+                          </Button>
+                        </div>
+                        {rating === -1 && (
+                          <div className="mt-4 space-y-3">
+                            <div className="flex flex-wrap gap-1.5">
+                              {BAD_REASONS.map((r) => (
+                                <button
+                                  key={r}
+                                  aria-pressed={reasons.includes(r)}
+                                  onClick={() => setReasons((x) => (x.includes(r) ? x.filter((y) => y !== r) : [...x, r]))}
+                                  className={`text-xs px-3 py-1.5 rounded-full border ${reasons.includes(r) ? "bg-text text-bg border-text" : "border-border text-text-muted hover:text-text"}`}
+                                >
+                                  {r}
+                                </button>
+                              ))}
+                            </div>
+                            <Button size="sm" onClick={() => sendFeedback({ generationId, rating: -1, reasons }).then(() => setFeedbackSent(true)).catch(() => undefined)}>
+                              Send
+                            </Button>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </Card>
+                )}
 
                 <Button variant="ghost" className="w-full" onClick={generate}>
                   ↺ Regenerate
