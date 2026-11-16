@@ -83,6 +83,38 @@ try {
   try { await c.query("savepoint s4"); await c.query(`update workspace_members set role='owner' where user_id=$1 and workspace_id=$2`, [b, wsA]); } catch { blocked = true; await c.query("rollback to savepoint s4"); }
   ok(blocked, "admin cannot promote themselves to owner");
 
+  // ── 0006 invite-only membership ────────────────────────────────────────────
+  const cId = "00000000-0000-4000-8000-00000000000c";
+  await c.query(`reset role`);
+  await c.query(`insert into auth.users (id, email, aud, role, raw_user_meta_data) values ($1,'c@test.dev','authenticated','authenticated',$2)`,
+    [cId, JSON.stringify({ full_name: "c", terms_accepted: true })]);
+  const asUser = async (uid, email) => {
+    await c.query(`reset role`);
+    await c.query(`select set_config('request.jwt.claims', $1, true)`, [JSON.stringify({ sub: uid, role: "authenticated", email })]);
+    await c.query(`set local role authenticated`);
+  };
+  const fails = async (sp, sql, params) => {
+    try { await c.query(`savepoint ${sp}`); await c.query(sql, params); return false; } catch { await c.query(`rollback to savepoint ${sp}`); return true; }
+  };
+
+  await asUser(b, "b@test.dev"); // b is an admin of A's workspace
+  ok(await fails("m1", `insert into workspace_members (workspace_id, user_id, role) values ($1,$2,'editor')`, [wsA, cId]), "admin cannot add a member directly without an invite");
+  const invToken = (await c.query(`insert into workspace_invites (workspace_id, email, role, invited_by) values ($1,'c@test.dev','viewer',$2) returning token`, [wsA, b])).rows[0].token;
+  await c.query(`insert into workspace_invites (workspace_id, email, role, invited_by, expires_at) values ($1,'c@test.dev','editor',$2, now() - interval '1 day')`, [wsA, b]);
+  const oldToken = (await c.query(`select token from workspace_invites where expires_at < now() and workspace_id=$1`, [wsA])).rows[0].token;
+
+  await asUser(a, "a@test.dev");
+  ok(await fails("m2", `select accept_invite($1)`, [invToken]), "invite cannot be accepted by a different email");
+  await asUser(cId, "c@test.dev");
+  ok(await fails("m3", `select accept_invite($1)`, [oldToken]), "expired invite is rejected");
+  ok(await fails("m4", `select accept_invite('nope')`), "unknown invite token is rejected");
+  const accepted = (await c.query(`select accept_invite($1) as ws`, [invToken])).rows[0].ws;
+  ok(accepted === wsA, "invitee joins the workspace by accepting a valid invite");
+  ok((await c.query(`select role from workspace_members where workspace_id=$1 and user_id=$2`, [wsA, cId])).rows[0]?.role === "viewer", "accepted invite grants the invited role");
+  ok(await fails("m5", `select accept_invite($1)`, [invToken]), "invite cannot be used twice");
+  await c.query(`reset role`);
+  await c.query(`delete from workspace_members where workspace_id=$1 and user_id=$2`, [wsA, cId]);
+
   // Tenant mixing on UPDATE: a post cannot be re-pointed at another workspace.
   await as(a);
   await c.query(`update posts set workspace_id=$1 where id=$2`, [wsB, post.id]).catch(() => {});
