@@ -3,6 +3,7 @@ import { dedupeColors, hexToRgb } from "../color";
 import { complianceFor } from "../audience";
 import { ExtractSchema } from "../schemas";
 import { AGE_GROUPS, MOMENTS, MOTIVATIONS, type ModelPatch } from "../model";
+import { BUSINESS_MODEL_KEYS, INDUSTRY_KEYS, PRIMARY_GOAL_KEYS } from "../taxonomy";
 import type { IngestOutput } from "./ingest";
 import type { StageDefinition, StagePatch } from "./types";
 
@@ -34,6 +35,9 @@ Return JSON with exactly these keys:
   "oneLiner": "what the brand is, in under 15 words",
   "offering": "what they sell, plain words",
   "category": "market category",
+  "industry": one of ${JSON.stringify(INDUSTRY_KEYS)},
+  "businessModel": one of ${JSON.stringify(BUSINESS_MODEL_KEYS)},
+  "primaryGoal": the most likely marketing goal, one of ${JSON.stringify(PRIMARY_GOAL_KEYS)},
   "problem": "customer problem they solve",
   "promise": "the core promise",
   "differentiators": ["up to 3"],
@@ -151,6 +155,14 @@ export const extractStage: StageDefinition<IngestOutput> = {
       },
       options: { source: "inferred", confidence: Math.min(0.5, r.audienceConfidence * 0.6) },
     });
+
+    // Classification: a guess the user should confirm (low confidence → needs-check).
+    if (r.industry || r.businessModel || r.primaryGoal) {
+      patches.push({
+        patch: { strategy: { industry: r.industry, businessModel: r.businessModel, primaryGoal: r.primaryGoal } },
+        options: { source: "inferred", confidence: 0.4 },
+      });
+    }
 
     // Everything else: a reasonable inference from the evidence.
     patches.push({

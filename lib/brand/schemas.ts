@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { AGE_GROUPS, MOMENTS, MOTIVATIONS } from "./model";
+import { BUSINESS_MODEL_KEYS, INDUSTRY_KEYS, PRIMARY_GOAL_KEYS } from "./taxonomy";
 
 // Lenient schemas: cheap models sometimes drop or mistype fields, so every
 // field falls back to a safe default instead of failing the whole stage.
@@ -38,6 +39,9 @@ export const ExtractSchema = z.object({
   oneLiner: str,
   offering: str,
   category: str,
+  industry: z.enum(INDUSTRY_KEYS).optional().catch(undefined),
+  businessModel: z.enum(BUSINESS_MODEL_KEYS).optional().catch(undefined),
+  primaryGoal: z.enum(PRIMARY_GOAL_KEYS).optional().catch(undefined),
   problem: str,
   promise: str,
   differentiators: strArr,

@@ -31,6 +31,12 @@ export async function saveBrandVersion(
   opts: { sources?: Brand["sources"]; source: VersionSource; stageId?: string; legacyId?: string }
 ) {
   const { db, userId, workspaceId } = s;
+  // Queryable copy of the classification (the BrandModel stays the source of truth).
+  const classification = {
+    industry: model.strategy.industry ?? null,
+    business_model: model.strategy.businessModel ?? null,
+    primary_goal: model.strategy.primaryGoal ?? null,
+  };
   const { data: existing, error: readErr } = await db
     .from("brands")
     .select("id, current:brand_versions!brands_current_version_fk(id, model)")
@@ -47,10 +53,14 @@ export async function saveBrandVersion(
       sources: opts.sources ?? {},
       legacy_id: opts.legacyId,
       created_by: userId,
+      ...classification,
     });
     if (error) throw error;
-  } else if (opts.sources) {
-    const { error } = await db.from("brands").update({ sources: opts.sources, name: model.name }).eq("id", model.id);
+  } else {
+    const { error } = await db
+      .from("brands")
+      .update({ ...(opts.sources ? { sources: opts.sources } : {}), name: model.name, ...classification })
+      .eq("id", model.id);
     if (error) throw error;
   }
 

@@ -28,6 +28,14 @@ try {
   await c.query(`insert into brand_versions (brand_id, model, source, created_by) values ($1, '{"name":"Chai Co 2"}', 'stage', $2)`, [brand, a]);
   const cur = (await c.query(`select b.name, v.version from brands b join brand_versions v on v.id=b.current_version_id where b.id=$1`, [brand])).rows[0];
   ok(cur?.version === 2 && cur.name === "Chai Co 2", "brand_versions numbered and current_version_id updated");
+  await c.query(`update brands set industry='food_beverage', business_model='d2c_ecommerce', primary_goal='sales' where id=$1`, [brand]);
+  ok((await c.query(`select 1 from brands where id=$1 and industry='food_beverage'`, [brand])).rowCount === 1, "brands accept controlled classification values");
+  let badClass = false;
+  try { await c.query("savepoint sc"); await c.query(`update brands set industry='made_up' where id=$1`, [brand]); } catch { badClass = true; await c.query("rollback to savepoint sc"); }
+  ok(badClass, "brands reject industry values outside the controlled list");
+  badClass = false;
+  try { await c.query("savepoint sg"); await c.query(`update brands set primary_goal='world_domination' where id=$1`, [brand]); } catch { badClass = true; await c.query("rollback to savepoint sg"); }
+  ok(badClass, "brands reject goals outside the controlled list");
   const post = (await c.query(`insert into posts (brand_id, content, original_content, created_by) values ($1,'{"caption":"x"}','{"caption":"x"}',$2) returning id, workspace_id`, [brand, a])).rows[0];
   ok(post.workspace_id === wsA, "posts inherit workspace_id from brand");
   await c.query(`update posts set content='{"caption":"y"}', original_content='{"caption":"hacked"}' where id=$1`, [post.id]);

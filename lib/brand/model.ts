@@ -9,6 +9,8 @@
 //   voice       → NN/g four dimensions of tone
 //   content     → pillars + Ehrenberg-Bass category entry points / distinctive assets
 
+import type { BusinessModel, Industry, PrimaryGoal } from "./taxonomy";
+
 export type BrandMode = "analyse" | "build" | "refine";
 
 export type Gender = "women" | "men" | "all";
@@ -61,6 +63,10 @@ export interface Audience {
 
 export interface Strategy {
   category: string;
+  /** Controlled lists (lib/brand/taxonomy.ts); unset on brands made before classification existed. */
+  industry?: Industry;
+  businessModel?: BusinessModel;
+  primaryGoal?: PrimaryGoal;
   offering: string; // what they sell, in plain words
   audience: Audience;
   problem: string;
