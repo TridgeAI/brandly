@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 export const maxDuration = 60;
 import { STAGES, runStages } from "@/lib/brand/pipelines";
 import type { BrandModel } from "@/lib/brand/model";
-import { friendlyError } from "@/lib/brand/jobs";
+import { friendlyError } from "@/lib/errors";
 import { llmScope } from "@/lib/db/llm-scope";
 import { errorResponse, requireSession } from "@/lib/db/session";
 

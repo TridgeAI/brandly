@@ -2,7 +2,7 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 // Pages anyone can open. Everything else needs a session.
-const PUBLIC_PATHS = ["/login", "/signup", "/forgot-password", "/auth/"];
+const PUBLIC_PATHS = ["/login", "/signup", "/forgot-password", "/auth/", "/api/cron/"]; // cron routes check CRON_SECRET themselves
 
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({ request });

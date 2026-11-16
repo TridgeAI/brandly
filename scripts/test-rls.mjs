@@ -98,6 +98,44 @@ try {
   blocked = false;
   try { await c.query("savepoint s6"); await c.query(`insert into generation_feedback (workspace_id, llm_call_id, user_id, rating) values ($1,$2,$3,1)`, [wsA, foreignCall, a]); } catch { blocked = true; await c.query("rollback to savepoint s6"); }
   ok(blocked, "feedback cannot reference another workspace's llm_call");
+
+  // ── 0004 jobs queue ────────────────────────────────────────────────────────
+  await c.query(`reset role`);
+  const j1 = (await c.query(`insert into jobs (workspace_id, kind, payload) values ($1,'test.echo','{"n":1}') returning id`, [wsA])).rows[0].id;
+  await as(a);
+  ok((await c.query(`select 1 from jobs where id=$1`, [j1])).rowCount === 1, "member can read their workspace's jobs");
+  blocked = false;
+  try { await c.query("savepoint s7"); await c.query(`insert into jobs (workspace_id, kind) values ($1,'test.echo')`, [wsA]); } catch { blocked = true; await c.query("rollback to savepoint s7"); }
+  ok(blocked, "members cannot insert jobs");
+  const upd = await c.query(`update jobs set status='done' where id=$1`, [j1]);
+  ok(upd.rowCount === 0, "members cannot update jobs");
+  const del = await c.query(`delete from jobs where id=$1`, [j1]);
+  ok(del.rowCount === 0, "members cannot delete jobs");
+  // B is an admin of A's workspace by now (see 0003 tests), so drop that membership first.
+  await c.query(`reset role`);
+  await c.query(`delete from workspace_members where workspace_id=$1 and user_id=$2`, [wsA, b]);
+  await as(b);
+  ok((await c.query(`select 1 from jobs where id=$1`, [j1])).rowCount === 0, "non-members cannot see A's jobs");
+  blocked = false;
+  try { await c.query("savepoint s8"); await c.query(`select * from claim_jobs('x', 1)`); } catch { blocked = true; await c.query("rollback to savepoint s8"); }
+  ok(blocked, "signed-in users cannot call claim_jobs");
+
+  await c.query(`reset role`);
+  await c.query(`delete from jobs`);
+  const q1 = (await c.query(`insert into jobs (workspace_id, kind, run_at) values ($1,'test.echo', now() - interval '2 minutes') returning id`, [wsA])).rows[0].id;
+  const q2 = (await c.query(`insert into jobs (workspace_id, kind, run_at) values ($1,'test.echo', now() - interval '1 minute') returning id`, [wsA])).rows[0].id;
+  await c.query(`insert into jobs (workspace_id, kind, run_at) values ($1,'test.echo', now() + interval '1 hour')`, [wsA]);
+  const first = (await c.query(`select * from claim_jobs('w1', 1)`)).rows;
+  const second = (await c.query(`select * from claim_jobs('w2', 5)`)).rows;
+  ok(first.length === 1 && first[0].id === q1 && first[0].attempts === 1 && first[0].status === "running", "claim_jobs takes the oldest due job");
+  ok(second.length === 1 && second[0].id === q2, "claim_jobs never returns a running job twice, and skips future jobs");
+  await c.query(`update jobs set locked_at = now() - interval '20 minutes' where id=$1`, [q1]);
+  const stale = (await c.query(`select * from claim_jobs('w3', 5)`)).rows;
+  ok(stale.length === 1 && stale[0].id === q1 && stale[0].attempts === 2, "claim_jobs reclaims jobs from a crashed worker");
+  await c.query(`insert into jobs (workspace_id, kind, dedupe_key) values ($1,'test.echo','k1')`, [wsA]);
+  blocked = false;
+  try { await c.query("savepoint s9"); await c.query(`insert into jobs (workspace_id, kind, dedupe_key) values ($1,'test.echo','k1')`, [wsA]); } catch { blocked = true; await c.query("rollback to savepoint s9"); }
+  ok(blocked, "dedupe_key allows only one active job per key");
 } finally {
   await c.query("rollback");
   await c.end();

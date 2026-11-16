@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PIPELINES, runStages, type PipelineId } from "@/lib/brand/pipelines";
-import { friendlyError } from "@/lib/brand/jobs";
+import { friendlyError } from "@/lib/errors";
 import { emptyModel, type BrandModel } from "@/lib/brand/model";
 import { errorResponse, requireSession } from "@/lib/db/session";
 import { withLlmContext } from "@/lib/llm-log";
