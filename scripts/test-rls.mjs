@@ -56,6 +56,48 @@ try {
   blocked = false;
   try { await c.query("savepoint s2"); await c.query(`insert into llm_calls (feature) values ('x')`); } catch { blocked = true; await c.query("rollback to savepoint s2"); }
   ok(blocked, "clients cannot write llm_calls directly");
+
+  // ── 0003 security hardening ────────────────────────────────────────────────
+  await c.query(`reset role`);
+  const wsB = (await c.query(`select id from workspaces where owner_id=$1`, [b])).rows[0].id;
+  await c.query(`insert into workspace_members (workspace_id, user_id, role) values ($1,$2,'admin')`, [wsA, b]);
+
+  // An admin must not be able to move their membership row into another workspace.
+  await as(b);
+  blocked = false;
+  try { await c.query("savepoint s3"); await c.query(`update workspace_members set workspace_id=$1 where user_id=$2 and workspace_id=$3`, [wsB, b, wsA]); } catch { blocked = true; await c.query("rollback to savepoint s3"); }
+  ok(blocked, "admin cannot rewrite workspace_id of a membership");
+  // An admin must not be able to demote or edit the owner row.
+  const demote = await c.query(`update workspace_members set role='viewer' where user_id=$1 and workspace_id=$2`, [a, wsA]);
+  ok(demote.rowCount === 0, "admin cannot demote the owner");
+  // An admin must not be able to promote themselves to owner.
+  blocked = false;
+  try { await c.query("savepoint s4"); await c.query(`update workspace_members set role='owner' where user_id=$1 and workspace_id=$2`, [b, wsA]); } catch { blocked = true; await c.query("rollback to savepoint s4"); }
+  ok(blocked, "admin cannot promote themselves to owner");
+
+  // Tenant mixing on UPDATE: a post cannot be re-pointed at another workspace.
+  await as(a);
+  await c.query(`update posts set workspace_id=$1 where id=$2`, [wsB, post.id]).catch(() => {});
+  await c.query(`reset role`);
+  ok((await c.query(`select workspace_id from posts where id=$1`, [post.id])).rows[0].workspace_id === wsA, "posts keep their brand's workspace_id on UPDATE");
+
+  // post_metrics inherits the workspace from its publication, not from the client.
+  await as(a);
+  const pub = (await c.query(`insert into post_publications (post_id, platform) values ($1,'instagram') returning id`, [post.id])).rows[0].id;
+  const met = (await c.query(`insert into post_metrics (publication_id, workspace_id, likes) values ($1,$2,5) returning workspace_id`, [pub, wsA])).rows[0];
+  ok(met.workspace_id === wsA, "post_metrics inherits workspace_id from its publication");
+  blocked = false;
+  try { await c.query("savepoint s5"); await c.query(`insert into post_metrics (publication_id, workspace_id, likes) values ($1,$2,5)`, [pub, wsB]); } catch { blocked = true; await c.query("rollback to savepoint s5"); }
+  const metB = (await c.query(`select workspace_id from post_metrics where publication_id=$1`, [pub])).rows;
+  ok(metB.every((r) => r.workspace_id === wsA), "post_metrics cannot be filed under another workspace");
+
+  // Feedback cannot cite another workspace's llm_call.
+  await c.query(`reset role`);
+  const foreignCall = (await c.query(`insert into llm_calls (feature, workspace_id) values ('x', $1) returning id`, [wsB])).rows[0].id;
+  await as(a);
+  blocked = false;
+  try { await c.query("savepoint s6"); await c.query(`insert into generation_feedback (workspace_id, llm_call_id, user_id, rating) values ($1,$2,$3,1)`, [wsA, foreignCall, a]); } catch { blocked = true; await c.query("rollback to savepoint s6"); }
+  ok(blocked, "feedback cannot reference another workspace's llm_call");
 } finally {
   await c.query("rollback");
   await c.end();

@@ -1,5 +1,5 @@
 import "server-only";
-import { assertPublicUrl } from "@/lib/web";
+import { safeFetch } from "@/lib/net/safe-fetch";
 import { hexToRgb } from "@/lib/brand/color";
 import type { Db } from "@/lib/db/session";
 
@@ -27,8 +27,8 @@ async function fetchBytes(url: string): Promise<{ buf: Buffer; type: string } | 
   }
   const supabaseHost = process.env.NEXT_PUBLIC_SUPABASE_URL ? new URL(process.env.NEXT_PUBLIC_SUPABASE_URL).host : "";
   const target = new URL(url);
-  if (target.host !== supabaseHost) await assertPublicUrl(url);
-  const res = await fetch(target, { signal: AbortSignal.timeout(20_000), headers: { "User-Agent": "Mozilla/5.0 (compatible; BrandlyBot/1.0)" } });
+  const init = { signal: AbortSignal.timeout(20_000), headers: { "User-Agent": "Mozilla/5.0 (compatible; BrandlyBot/1.0)" } };
+  const res = target.host === supabaseHost ? await fetch(target, init) : await safeFetch(url, init);
   if (!res.ok) return null;
   const len = Number(res.headers.get("content-length") ?? 0);
   if (len > MAX_BYTES) return null;

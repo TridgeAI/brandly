@@ -1,54 +1,19 @@
-import { lookup } from "node:dns/promises";
-import { isIP } from "node:net";
 import { dedupeColors, hexToHsl } from "./brand/color";
+import { assertPublicUrl, safeFetch } from "./net/safe-fetch";
 
 const UA = "Mozilla/5.0 (compatible; BrandlyBot/1.0; +https://brandly.app/bot)";
 const MAX_HTML_BYTES = 1_500_000;
 const MAX_CSS_BYTES = 400_000;
 
-// ── SSRF guard ─────────────────────────────────────────────────────────────
-function isPrivateIp(ip: string): boolean {
-  if (ip.includes(":")) {
-    const v6 = ip.toLowerCase();
-    if (v6.startsWith("::ffff:")) return isPrivateIp(v6.slice(7));
-    return v6 === "::1" || v6 === "::" || v6.startsWith("fc") || v6.startsWith("fd") || v6.startsWith("fe80");
-  }
-  const [a, b] = ip.split(".").map(Number);
-  return (
-    a === 10 ||
-    a === 127 ||
-    a === 0 ||
-    (a === 169 && b === 254) ||
-    (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168) ||
-    (a === 100 && b >= 64 && b <= 127) ||
-    a >= 224
-  );
-}
-
-/** Normalises a user-typed URL and rejects anything that isn't a public http(s) address. */
-export async function assertPublicUrl(raw: string): Promise<URL> {
-  const withScheme = /^https?:\/\//i.test(raw.trim()) ? raw.trim() : `https://${raw.trim()}`;
-  const url = new URL(withScheme);
-  if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("Only http and https links are supported.");
-  if (url.username || url.password) throw new Error("Links with passwords are not supported.");
-  const host = url.hostname.replace(/^\[|\]$/g, "");
-  if (host === "localhost" || host.endsWith(".local") || host.endsWith(".internal")) throw new Error("That address isn't public.");
-  const ips = isIP(host) ? [host] : (await lookup(host, { all: true })).map((r) => r.address);
-  if (!ips.length || ips.some(isPrivateIp)) throw new Error("That address isn't public.");
-  return url;
-}
+// SSRF guard lives in lib/net/safe-fetch.ts; re-exported for existing importers.
+export { assertPublicUrl };
 
 async function fetchCapped(url: string, maxBytes: number, timeoutMs = 15_000): Promise<{ text: string; finalUrl: string } | null> {
-  const safe = await assertPublicUrl(url);
-  const res = await fetch(safe, {
+  const res = await safeFetch(url, {
     headers: { "User-Agent": UA, Accept: "text/html,text/css,*/*;q=0.8" },
-    redirect: "follow",
     signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok || !res.body) return null;
-  // Re-check where redirects landed.
-  await assertPublicUrl(res.url);
   const reader = res.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
@@ -59,7 +24,7 @@ async function fetchCapped(url: string, maxBytes: number, timeoutMs = 15_000): P
     size += value.byteLength;
   }
   reader.cancel().catch(() => {});
-  return { text: new TextDecoder().decode(Buffer.concat(chunks.map((c) => Buffer.from(c)))), finalUrl: res.url };
+  return { text: new TextDecoder().decode(Buffer.concat(chunks.map((c) => Buffer.from(c)))), finalUrl: res.url || url };
 }
 
 const stripTags = (html: string) =>

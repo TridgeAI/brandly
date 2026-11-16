@@ -2,7 +2,7 @@ import "server-only";
 import { createHash } from "node:crypto";
 import type { Session } from "@/lib/db/session";
 import { downloadAsJpeg } from "@/lib/render/assets";
-import { assertPublicUrl } from "@/lib/web";
+import { safeFetch } from "@/lib/net/safe-fetch";
 import type { BrandModel, BrandPhoto } from "./model";
 
 export const MAX_BRAND_PHOTOS = 24;
@@ -59,7 +59,7 @@ export async function importBrandPhotos(s: Session, brandId: string, urls: strin
 /** Copies the logo into the logos bucket so renders don't depend on the website. */
 export async function storeLogo(s: Session, brandId: string, url: string): Promise<string | undefined> {
   try {
-    const res = await fetch(await assertPublicUrl(url), { signal: AbortSignal.timeout(15_000) });
+    const res = await safeFetch(url, { signal: AbortSignal.timeout(15_000) });
     if (!res.ok) return undefined;
     const buf = Buffer.from(await res.arrayBuffer());
     if (buf.byteLength > 5_000_000) return undefined;
