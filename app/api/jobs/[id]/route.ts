@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getJob } from "@/lib/brand/jobs";
+import { errorResponse, requireSession } from "@/lib/db/session";
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  try {
+    await requireSession();
+  } catch (err) {
+    return errorResponse(err, "job auth");
+  }
   const { id } = await params;
   const job = getJob(id);
   if (!job) return NextResponse.json({ error: "Job not found or expired" }, { status: 404 });

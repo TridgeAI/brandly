@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { PIPELINES, runStages, type PipelineId } from "@/lib/brand/pipelines";
 import { friendlyError } from "@/lib/brand/jobs";
 import { emptyModel, type BrandModel } from "@/lib/brand/model";
-import { optionalSession } from "@/lib/db/session";
+import { errorResponse, requireSession } from "@/lib/db/session";
 import { withLlmContext } from "@/lib/llm-log";
 import { attachSourceMedia } from "@/lib/brand/photos";
 
@@ -18,6 +18,12 @@ export const maxDuration = 120;
 // Phase 1 is stateless: the browser sends the current model and gets the merged model back.
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  let session;
+  try {
+    session = await requireSession();
+  } catch (err) {
+    return errorResponse(err, "run auth");
+  }
   const body = (await req.json().catch(() => ({}))) as {
     pipeline?: PipelineId;
     model?: BrandModel;
@@ -29,7 +35,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   const model = body.model ?? emptyModel(body.name?.trim() || "Untitled brand", pipeline, id);
   // Resolve the user before streaming so every LLM call in the run is logged against them.
-  const session = await optionalSession();
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({

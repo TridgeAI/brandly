@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { LAYOUT_IDS, type BrandModel, type LayoutId } from "@/lib/brand/model";
 import { chooseLayout, layoutNeedsPhoto } from "@/lib/content/brief";
 import { recentPosts } from "@/lib/content/history";
-import { errorResponse, optionalSession } from "@/lib/db/session";
+import { errorResponse, requireSession } from "@/lib/db/session";
 import { layoutKitOf } from "@/lib/render/kit";
 import { encodeForUpload, generatePhoto, loadVisuals, resolvePhoto, storeRendered, type PhotoRef } from "@/lib/render/media";
 import { renderPost, type RenderSize } from "@/lib/render/render";
@@ -32,7 +32,7 @@ export async function POST(req: NextRequest) {
     if (!b.brandModel?.expression || !b.post) return NextResponse.json({ error: "brandModel and post are required" }, { status: 400 });
     const model = b.brandModel;
     const size: RenderSize = b.size === "1080x1080" ? "1080x1080" : "1080x1350";
-    const session = await optionalSession();
+    const session = await requireSession();
 
     const kit = layoutKitOf(model)!;
     const history = await recentPosts(model.id, 15, session);
@@ -52,7 +52,6 @@ export async function POST(req: NextRequest) {
 
     let rendered: RenderedMedia;
     if (b.store) {
-      if (!session) return NextResponse.json({ error: "Sign in to save images." }, { status: 401 });
       const key = (b.key ?? crypto.randomUUID()).replace(/[^\w-]/g, "").slice(0, 64) || crypto.randomUUID();
       const encoded = await Promise.all(pngs.map((p) => encodeForUpload(p)));
       const { paths, urls } = await storeRendered(session, model.id, key, encoded);

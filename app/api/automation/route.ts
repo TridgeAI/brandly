@@ -6,9 +6,11 @@ import type { BrandModel } from "@/lib/brand/model";
 import { fetchRssFeed, fetchProductPageContent } from "@/lib/automation-utils";
 import { n8nEnabled } from "@/lib/n8n";
 import { generatePost } from "@/lib/content/generate";
+import { AuthError, errorResponse, requireSession } from "@/lib/db/session";
 
 export async function POST(req: NextRequest) {
   try {
+    await requireSession();
     const body: {
       brandDNA: BrandDNA;
       /** Richer brand context; preferred over brandDNA when present. */
@@ -56,6 +58,7 @@ export async function POST(req: NextRequest) {
     if ("error" in result) return NextResponse.json({ error: result.error }, { status: result.status });
     return NextResponse.json(result);
   } catch (err) {
+    if (err instanceof AuthError) return errorResponse(err, "automation");
     console.error("[automation]", err);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }

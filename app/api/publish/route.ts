@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { callN8n, n8nEnabled } from "@/lib/n8n";
 import { postizEnabled, publishWithPostiz } from "@/lib/postiz";
-import { optionalSession } from "@/lib/db/session";
+import { errorResponse, requireSession } from "@/lib/db/session";
 import { signPaths } from "@/lib/render/media";
 import type { ScheduledPost } from "@/lib/types";
 
@@ -11,17 +11,20 @@ export const maxDuration = 60;
 // Without n8n, falls back to calling Postiz directly (POSTIZ_API_URL/POSTIZ_API_KEY).
 // Body: { post, mediaUrls?, publishAt? } — a future publishAt makes Postiz schedule the post.
 export async function POST(req: NextRequest) {
+  let session;
+  try {
+    session = await requireSession();
+  } catch (err) {
+    return errorResponse(err, "publish auth");
+  }
   const body = await req.json();
   // Branded images live in private storage: sign fresh links for every slide so Postiz can fetch them.
   const paths = (body?.post as ScheduledPost | undefined)?.content?.rendered?.paths;
   if (!body?.mediaUrls?.length && paths?.length) {
-    const session = await optionalSession();
-    if (session) {
-      try {
-        body.mediaUrls = await signPaths(session, "images", paths, 60 * 60 * 24 * 7);
-      } catch (err) {
-        console.warn("[publish] couldn't sign media", err);
-      }
+    try {
+      body.mediaUrls = await signPaths(session, "images", paths, 60 * 60 * 24 * 7);
+    } catch (err) {
+      console.warn("[publish] couldn't sign media", err);
     }
   }
   if (n8nEnabled() || !postizEnabled()) return callN8n("publish", body);

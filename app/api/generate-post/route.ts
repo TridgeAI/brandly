@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { GeneratePostPayload } from "@/lib/types";
 import { generatePost } from "@/lib/content/generate";
+import { AuthError, errorResponse, requireSession } from "@/lib/db/session";
 
 export const maxDuration = 60;
 
@@ -8,6 +9,7 @@ export const maxDuration = 60;
 // with the full brand context, and chooses a layout. Runs through n8n when it is configured.
 export async function POST(req: NextRequest) {
   try {
+    await requireSession();
     const body: GeneratePostPayload = await req.json();
     if (!body.platforms?.length) return NextResponse.json({ error: "Choose at least one platform" }, { status: 400 });
     const result = await generatePost({
@@ -24,6 +26,7 @@ export async function POST(req: NextRequest) {
     if ("error" in result) return NextResponse.json({ error: result.error }, { status: result.status });
     return NextResponse.json(result);
   } catch (err) {
+    if (err instanceof AuthError) return errorResponse(err, "generate-post");
     console.error("[generate-post]", err);
     return NextResponse.json({ error: err instanceof Error ? err.message : "Internal server error" }, { status: 500 });
   }
