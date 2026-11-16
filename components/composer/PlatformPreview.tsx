@@ -9,10 +9,15 @@ interface Props {
   platforms: Platform[];
   brandDNA?: BrandDNA | null;
   igHandle?: string;
+  /** Branded image(s) from /api/render-post; several = carousel. */
+  images?: string[];
+  imageLoading?: boolean;
 }
 
-export default function PlatformPreview({ post, platforms, brandDNA, igHandle }: Props) {
+export default function PlatformPreview({ post, platforms, brandDNA, igHandle, images = [], imageLoading }: Props) {
   const [active, setActive] = useState<Platform>(platforms[0]);
+  const [slide, setSlide] = useState(0);
+  const imageUrl = images[Math.min(slide, images.length - 1)] ?? null;
 
   const getCaption = () => {
     return post.platformVariants?.[active] ?? post.caption;
@@ -59,7 +64,7 @@ export default function PlatformPreview({ post, platforms, brandDNA, igHandle }:
             style={{
               background: brandDNA
                 ? `linear-gradient(135deg, ${brandDNA.colors.primary}, ${brandDNA.colors.secondary})`
-                : "linear-gradient(135deg, #7C6EF8, #A89DF9)",
+                : "rgb(var(--text) / 0.15)",
             }}
           />
           <div>
@@ -74,30 +79,60 @@ export default function PlatformPreview({ post, platforms, brandDNA, igHandle }:
           </div>
         </div>
 
+        {/* Branded image (or carousel) */}
+        {imageUrl && (
+          <div className={clsx("relative border-b border-border transition-opacity", imageLoading && "opacity-60")}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={imageUrl} alt={post.headline || post.imagePrompt} className="w-full object-cover" />
+            {images.length > 1 && (
+              <>
+                <span className="absolute top-3 right-3 text-[11px] px-2 py-0.5 rounded-full bg-black/60 text-white">
+                  {Math.min(slide, images.length - 1) + 1}/{images.length}
+                </span>
+                <button
+                  aria-label="Previous slide"
+                  disabled={slide === 0}
+                  onClick={() => setSlide((i) => Math.max(0, i - 1))}
+                  className="absolute left-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/50 text-white disabled:opacity-0"
+                >
+                  ‹
+                </button>
+                <button
+                  aria-label="Next slide"
+                  disabled={slide >= images.length - 1}
+                  onClick={() => setSlide((i) => Math.min(images.length - 1, i + 1))}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/50 text-white disabled:opacity-0"
+                >
+                  ›
+                </button>
+              </>
+            )}
+          </div>
+        )}
+
         {/* Image placeholder */}
-        {(active === "instagram" || active === "facebook") && (
+        {!imageUrl && (active === "instagram" || active === "facebook") && (
           <div
-            className="aspect-square flex flex-col items-center justify-center p-6 text-center border-b border-border"
+            className="aspect-[4/5] flex flex-col items-center justify-center p-6 text-center border-b border-border"
             style={{
               background: brandDNA
                 ? `linear-gradient(135deg, ${brandDNA.colors.primary}18, ${brandDNA.colors.secondary}18)`
-                : "linear-gradient(135deg, #7C6EF818, #A89DF918)",
+                : "rgb(var(--text) / 0.04)",
             }}
           >
-            <div className="text-4xl mb-3">🎨</div>
-            <p className="text-xs font-semibold text-accent-light mb-2">Image Generation Prompt</p>
+            <p className="text-xs font-medium text-text mb-2">{imageLoading ? "Laying out your post…" : "Image idea"}</p>
             <p className="text-xs text-text-muted leading-relaxed max-w-xs">{post.imagePrompt}</p>
           </div>
         )}
 
         {/* LinkedIn header image */}
-        {active === "linkedin" && (
+        {!imageUrl && active === "linkedin" && (
           <div
             className="h-32 flex items-center justify-center border-b border-border"
             style={{
               background: brandDNA
                 ? `linear-gradient(135deg, ${brandDNA.colors.primary}, ${brandDNA.colors.accent})`
-                : "linear-gradient(135deg, #7C6EF8, #A89DF9)",
+                : "rgb(var(--text) / 0.15)",
             }}
           >
             <p className="text-white/70 text-xs font-medium">Banner image area</p>
