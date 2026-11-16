@@ -47,6 +47,29 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000)
 
+## Database & sign-in (Supabase)
+
+- Schema lives in `supabase/migrations/*.sql`. Apply with `npm run db:migrate` (uses `DATABASE_URL` from `.env.local`).
+- `npm run db:test` checks the signup trigger and that workspaces can't see each other's data (runs in a rolled-back transaction).
+- Sign-in: email + password, or an emailed magic link / code. Each new user gets a personal workspace; brands, posts and rules belong to a workspace.
+- The browser keeps a cache (`lib/store.ts`); the database is the source of truth. Brands saved in a browser before accounts existed can be imported from the banner shown after sign-in.
+
+**Data collected to improve Brandly** (only workspaces that opt in are ever used for training or evals):
+
+| Table | What it records |
+|---|---|
+| `llm_calls` | every model call: feature, prompt version, model, tokens, latency, fallbacks, output |
+| `brand_versions` | every Brand Model change (append-only, with changed fields) |
+| `field_corrections` | a user changing a field the AI filled in (extraction accuracy) |
+| `build_sessions` | all directions shown in Build and the one picked |
+| `posts.original_content` | the model's exact output, kept unchanged next to the edited `content` |
+| `content_events` | generated, regenerated, edited (with edit ratio), scheduled, published, discarded |
+| `generation_feedback` | thumbs up/down + reasons |
+| `post_metrics` | engagement once publishing is connected |
+| `product_events` | onboarding funnel steps |
+
+Analysis views: `v_post_quality`, `v_cost_per_brand`, `v_field_accuracy`. Fill `model_prices` to get costs.
+
 ## Project Structure
 
 ```

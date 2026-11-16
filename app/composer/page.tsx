@@ -1,13 +1,19 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { PlatformIcon, TemplateIcon, TriggerIcon } from "@/components/ui/icons";
 import AppShell from "@/components/layout/AppShell";
 import { useStore } from "@/lib/store";
 import { Button, Input, Textarea, Card, Chip, SectionLabel, PageHeader, EmptyState } from "@/components/ui";
 import PlatformPreview from "@/components/composer/PlatformPreview";
 import Link from "next/link";
-import type { GeneratedPost, Platform, TemplateCategory, ScheduledPost } from "@/lib/types";
-import { CONTENT_TEMPLATES, PLATFORM_ICONS, PLATFORM_LABELS } from "@/lib/templates";
+import type { GeneratedPost, Platform, RenderedMedia, TemplateCategory, ScheduledPost } from "@/lib/types";
+import type { LayoutId } from "@/lib/brand/model";
+import { LAYOUT_LABELS, layoutKitOf } from "@/lib/render/kit";
+import { CONTENT_TEMPLATES, PLATFORM_LABELS } from "@/lib/templates";
 import { format, addDays } from "date-fns";
+import { sendFeedback, track } from "@/lib/track";
+
+const BAD_REASONS = ["Off-brand", "Wrong tone", "Too long", "Too generic", "Wrong facts"];
 
 const PLATFORMS: Platform[] = ["instagram", "facebook", "linkedin", "twitter"];
 const TONES = ["Brand default", "Witty & playful", "Professional", "Inspirational", "Educational", "Urgent"];
@@ -23,10 +29,79 @@ export default function ComposerPage() {
   const [additionalContext, setAdditionalContext] = useState("");
   const [generating, setGenerating] = useState(false);
   const [post, setPost] = useState<GeneratedPost | null>(null);
+  const [generationId, setGenerationId] = useState<string | null>(null);
+  const [rating, setRating] = useState<1 | -1 | null>(null);
+  const [reasons, setReasons] = useState<string[]>([]);
+  const [feedbackSent, setFeedbackSent] = useState(false);
+  const [genError, setGenError] = useState<string | null>(null);
   const [scheduleDate, setScheduleDate] = useState(
     format(addDays(new Date(), 1), "yyyy-MM-dd'T'HH:mm")
   );
   const [saved, setSaved] = useState(false);
+  const [size, setSize] = useState<RenderedMedia["size"]>("1080x1350");
+  const [rendered, setRendered] = useState<RenderedMedia | null>(null);
+  const [rendering, setRendering] = useState(false);
+  const [renderError, setRenderError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const renderSeq = useRef(0);
+  const textTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(textTimer.current), []);
+
+  type PhotoChoice = RenderedMedia["photo"] | null | "auto" | "generate";
+  const callRender = async (p: GeneratedPost, o: { layout?: LayoutId; photo?: PhotoChoice; size?: RenderedMedia["size"]; store?: boolean; key?: string }) => {
+    const res = await fetch("/api/render-post", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ brandModel: brand?.model, post: p, layout: o.layout ?? p.layout, photo: o.photo, size: o.size ?? size, store: o.store, key: o.key }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.rendered) throw new Error(data.error ?? `Couldn't make the image (HTTP ${res.status})`);
+    return data.rendered as RenderedMedia;
+  };
+
+  /** Renders the branded preview. Only the latest request updates the screen. */
+  const renderPreview = async (p: GeneratedPost, o: { layout?: LayoutId; photo?: PhotoChoice; size?: RenderedMedia["size"] } = {}) => {
+    if (!brand?.model) return;
+    const seq = ++renderSeq.current;
+    setRendering(true);
+    setRenderError(null);
+    try {
+      const r = await callRender(p, o);
+      if (seq !== renderSeq.current) return;
+      setRendered(r);
+      setSaved(false);
+      if (o.photo === "generate" && generationId) track("image_generated", { generationId, props: { layout: r.layout } });
+    } catch (err) {
+      if (seq === renderSeq.current) setRenderError(err instanceof Error ? err.message : String(err));
+    }
+    if (seq === renderSeq.current) setRendering(false);
+  };
+
+  // Keep the photo already chosen when only the layout or text changes.
+  const currentPhoto = (): PhotoChoice => rendered?.photo ?? "auto";
+
+  const switchLayout = (l: LayoutId) => {
+    if (!post) return;
+    const next = { ...post, layout: l };
+    setPost(next);
+    renderPreview(next, { layout: l, photo: currentPhoto() });
+  };
+
+  /** Editing the image text re-renders without another AI call. */
+  const editVisualText = (field: "headline" | "subline", value: string) => {
+    if (!post) return;
+    const next = { ...post, [field]: value };
+    setPost(next);
+    clearTimeout(textTimer.current);
+    textTimer.current = setTimeout(() => renderPreview(next, { photo: currentPhoto() }), 600);
+  };
+
+  const brandPhotos = brand?.model?.expression.photos ?? [];
+  const nextBrandPhoto = () => {
+    if (!post || !brandPhotos.length) return;
+    const i = brandPhotos.findIndex((p) => p.path === rendered?.photo?.ref);
+    renderPreview(post, { photo: { kind: "brand", ref: brandPhotos[(i + 1) % brandPhotos.length].path } });
+  };
 
   const togglePlatform = (p: Platform) => {
     setSelectedPlatforms((prev) =>
@@ -36,14 +111,23 @@ export default function ComposerPage() {
 
   const generate = async () => {
     if (!brand || selectedPlatforms.length === 0) return;
+    // Asking again for the same request means the last one wasn't good enough.
+    if (post && generationId && !saved) track("regenerated", { generationId });
     setGenerating(true);
+    setGenError(null);
+    setRating(null);
+    setReasons([]);
+    setFeedbackSent(false);
     setPost(null);
     setSaved(false);
+    setRendered(null);
+    setRenderError(null);
     const res = await fetch("/api/generate-post", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         brandDNA: brand.dna,
+        brandModel: brand.model,
         template: selectedTemplate,
         topic,
         platforms: selectedPlatforms,
@@ -51,37 +135,58 @@ export default function ComposerPage() {
         additionalContext,
       }),
     });
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
     setPost(data.post ?? null);
+    setGenerationId(data.generationId ?? null);
+    if (!data.post) setGenError(data.error ?? "Couldn't write a post. Please try again.");
     setGenerating(false);
+    if (data.post) renderPreview(data.post, { photo: "auto" });
   };
 
-  const schedulePost = (status: "draft" | "scheduled") => {
+  const schedulePost = async (status: "draft" | "scheduled") => {
     if (!post || !brand) return;
+    const id = crypto.randomUUID();
+    setSaving(true);
+    let content: GeneratedPost = { ...post, rendered: undefined };
+    // The preview only lives in the browser: save the branded image(s) to storage now.
+    if (rendered) {
+      try {
+        const stored = await callRender(post, { layout: rendered.layout, photo: rendered.photo ?? null, size: rendered.size, store: true, key: id });
+        content = { ...post, layout: stored.layout, rendered: stored };
+      } catch (err) {
+        setRenderError(err instanceof Error ? err.message : String(err));
+        setSaving(false);
+        return;
+      }
+    }
     const scheduled: ScheduledPost = {
-      id: `post_${Date.now()}`,
+      id,
       brandId: brand.id,
-      content: post,
+      content,
+      generationId: generationId ?? undefined,
       platforms: selectedPlatforms,
       scheduledAt: new Date(scheduleDate).toISOString(),
       status,
       createdAt: new Date().toISOString(),
+      ...(content.rendered?.urls[0] ? { mediaUrl: content.rendered.urls[0] } : {}),
     };
-    addPost(scheduled);
+    addPost(scheduled, { template: selectedTemplate, topic: topic || undefined });
+    setSaving(false);
     setSaved(true);
   };
+
+  const kit = layoutKitOf(brand?.model);
 
   if (!brand) {
     return (
       <AppShell>
         <div className="p-8">
           <EmptyState
-            icon="✦"
             title="No brand selected"
-            description="Build your Brand DNA first — the composer uses it to generate on-brand content."
+            description="Set up your brand first. Brandly uses it to write posts that sound like you."
             action={
               <Link href="/onboarding">
-                <Button>Build Brand DNA →</Button>
+                <Button>Set up your brand</Button>
               </Link>
             }
           />
@@ -116,7 +221,7 @@ export default function ComposerPage() {
                         : "border-border text-text-muted hover:border-accent/30 hover:text-text"
                     }`}
                   >
-                    <span className="text-lg block mb-1">{t.icon}</span>
+                    <span className="block mb-1.5"><TemplateIcon id={t.id} /></span>
                     <span className="font-medium">{t.label}</span>
                   </button>
                 ))}
@@ -137,7 +242,7 @@ export default function ComposerPage() {
                         : "border-border text-text-muted hover:border-accent/30"
                     }`}
                   >
-                    <span>{PLATFORM_ICONS[p]}</span>
+                    <span><PlatformIcon platform={p} /></span>
                     {PLATFORM_LABELS[p]}
                   </button>
                 ))}
@@ -202,7 +307,7 @@ export default function ComposerPage() {
               disabled={selectedPlatforms.length === 0}
               onClick={generate}
             >
-              {generating ? "Generating…" : "✦ Generate Post"}
+              {generating ? "Writing…" : "Write post"}
             </Button>
           </div>
 
@@ -210,25 +315,24 @@ export default function ComposerPage() {
           <div className="col-span-3 space-y-5">
             {!post && !generating && (
               <div className="flex flex-col items-center justify-center h-full min-h-[500px] text-center gap-4 border-2 border-dashed border-border rounded-2xl">
-                <div className="text-5xl opacity-30">✏️</div>
-                <p className="font-semibold text-text">Your generated post will appear here</p>
+                <p className="font-medium text-text">Your post will appear here</p>
                 <p className="text-sm text-text-muted max-w-xs">
-                  Select a template, choose platforms, and hit Generate.
+                  Pick what it&apos;s about and where it&apos;s going, then press Write post.
                 </p>
+                {genError && <p className="text-sm text-error max-w-xs">{genError}</p>}
               </div>
             )}
 
             {generating && (
               <div className="flex flex-col items-center justify-center h-full min-h-[500px] gap-4">
-                <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-accent to-accent-light flex items-center justify-center text-xl animate-spin-slow">
-                  ✦
+                <div className="w-full max-w-md space-y-3" aria-hidden>
+                  <div className="aspect-square rounded-xl bg-text/5 animate-pulse" />
+                  <div className="h-3 rounded bg-text/5 animate-pulse" />
+                  <div className="h-3 w-2/3 rounded bg-text/5 animate-pulse" />
                 </div>
-                <p className="text-text-muted">Writing on-brand content…</p>
-                <div className="flex flex-col gap-2 text-xs text-text-muted text-center">
-                  <p>✦ Applying {brand.name} Brand DNA</p>
-                  <p>✦ Adapting for {selectedPlatforms.join(", ")}</p>
-                  <p>✦ Generating image prompt & CTA</p>
-                </div>
+                <p className="text-sm text-text-muted">
+                  Writing for {selectedPlatforms.join(", ")} in {brand.name}&apos;s voice…
+                </p>
               </div>
             )}
 
@@ -240,6 +344,8 @@ export default function ComposerPage() {
                   platforms={selectedPlatforms}
                   brandDNA={brand.dna}
                   igHandle={brand.sources.instagram}
+                  images={rendered?.urls ?? []}
+                  imageLoading={rendering}
                 />
 
                 {/* All captions */}
@@ -250,7 +356,7 @@ export default function ComposerPage() {
                       {selectedPlatforms.map((p) => (
                         <div key={p}>
                           <p className="text-xs font-semibold text-text-muted mb-1.5">
-                            {PLATFORM_ICONS[p]} {PLATFORM_LABELS[p]}
+                            <PlatformIcon platform={p} /> {PLATFORM_LABELS[p]}
                           </p>
                           <p className="text-sm leading-relaxed bg-surface p-3 rounded-xl">
                             {post.platformVariants?.[p] ?? post.caption}
@@ -286,12 +392,64 @@ export default function ComposerPage() {
                   </div>
                 </Card>
 
-                {/* Image prompt */}
-                <Card className="p-5">
-                  <SectionLabel>AI Image Generation Prompt</SectionLabel>
-                  <p className="text-sm text-text-muted leading-relaxed bg-surface p-3 rounded-xl">
-                    {post.imagePrompt}
-                  </p>
+                {/* Branded visual */}
+                <Card className="p-5 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <SectionLabel>Visual</SectionLabel>
+                    <div className="flex gap-1" role="group" aria-label="Image size">
+                      {(["1080x1350", "1080x1080"] as const).map((sz) => (
+                        <button
+                          key={sz}
+                          aria-pressed={size === sz}
+                          onClick={() => {
+                            setSize(sz);
+                            renderPreview(post, { size: sz, photo: currentPhoto() });
+                          }}
+                          className={`text-xs px-3 py-1 rounded-full border ${size === sz ? "bg-accent/10 border-accent/40 text-accent-light" : "border-border text-text-muted hover:text-text"}`}
+                        >
+                          {sz === "1080x1350" ? "4:5" : "1:1"}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {kit && (
+                    <div className="flex flex-wrap gap-1.5" role="group" aria-label="Layout">
+                      {kit.layouts
+                        .filter((l) => l !== "carousel-cover" || (post.slides?.length ?? 0) >= 2)
+                        .map((l) => (
+                          <button
+                            key={l}
+                            aria-pressed={(rendered?.layout ?? post.layout) === l}
+                            onClick={() => switchLayout(l)}
+                            className={`text-xs px-3 py-1.5 rounded-full border transition-all ${
+                              (rendered?.layout ?? post.layout) === l ? "bg-text text-bg border-text" : "border-border text-text-muted hover:text-text"
+                            }`}
+                          >
+                            {LAYOUT_LABELS[l]}
+                          </button>
+                        ))}
+                    </div>
+                  )}
+                  <Input label="Headline on the image" value={post.headline ?? ""} onChange={(e) => editVisualText("headline", e.target.value)} />
+                  <Input label="Supporting line" value={post.subline ?? ""} onChange={(e) => editVisualText("subline", e.target.value)} />
+                  <div className="flex gap-2 flex-wrap items-center">
+                    {brandPhotos.length > 0 && (
+                      <Button size="sm" variant="secondary" disabled={rendering} onClick={nextBrandPhoto}>
+                        Use a brand photo
+                      </Button>
+                    )}
+                    <Button size="sm" variant="secondary" disabled={rendering} onClick={() => renderPreview(post, { photo: "generate" })}>
+                      New AI photo
+                    </Button>
+                    {rendering && <span className="text-xs text-text-muted">Laying out your post…</span>}
+                  </div>
+                  {post.imagePrompt && (
+                    <details className="text-xs text-text-muted">
+                      <summary className="cursor-pointer">Photo brief</summary>
+                      <p className="mt-2 leading-relaxed">{post.imagePrompt}</p>
+                    </details>
+                  )}
+                  {renderError && <p className="text-xs text-error">{renderError}</p>}
                 </Card>
 
                 {/* Schedule */}
@@ -308,15 +466,58 @@ export default function ComposerPage() {
                       />
                     </div>
                     <div className="flex gap-2">
-                      <Button variant="ghost" onClick={() => schedulePost("draft")} disabled={saved}>
+                      <Button variant="ghost" onClick={() => schedulePost("draft")} disabled={saved || saving}>
                         Save Draft
                       </Button>
-                      <Button onClick={() => schedulePost("scheduled")} disabled={saved}>
+                      <Button onClick={() => schedulePost("scheduled")} disabled={saved || saving} loading={saving}>
                         {saved ? "✓ Scheduled!" : "📅 Schedule Post"}
                       </Button>
                     </div>
                   </div>
                 </Card>
+
+                {/* Feedback */}
+                {generationId && (
+                  <Card className="p-5">
+                    {feedbackSent ? (
+                      <p className="text-sm text-text-muted">Thanks. This helps Brandly write better posts for you.</p>
+                    ) : (
+                      <>
+                        <div className="flex items-center gap-3">
+                          <span className="text-sm flex-1">Is this post on-brand?</span>
+                          <Button size="sm" variant={rating === 1 ? "primary" : "secondary"} aria-pressed={rating === 1} onClick={() => {
+                            setRating(1);
+                            sendFeedback({ generationId, rating: 1 }).then(() => setFeedbackSent(true)).catch(() => undefined);
+                          }}>
+                            Yes
+                          </Button>
+                          <Button size="sm" variant={rating === -1 ? "primary" : "secondary"} aria-pressed={rating === -1} onClick={() => setRating(-1)}>
+                            Not quite
+                          </Button>
+                        </div>
+                        {rating === -1 && (
+                          <div className="mt-4 space-y-3">
+                            <div className="flex flex-wrap gap-1.5">
+                              {BAD_REASONS.map((r) => (
+                                <button
+                                  key={r}
+                                  aria-pressed={reasons.includes(r)}
+                                  onClick={() => setReasons((x) => (x.includes(r) ? x.filter((y) => y !== r) : [...x, r]))}
+                                  className={`text-xs px-3 py-1.5 rounded-full border ${reasons.includes(r) ? "bg-text text-bg border-text" : "border-border text-text-muted hover:text-text"}`}
+                                >
+                                  {r}
+                                </button>
+                              ))}
+                            </div>
+                            <Button size="sm" onClick={() => sendFeedback({ generationId, rating: -1, reasons }).then(() => setFeedbackSent(true)).catch(() => undefined)}>
+                              Send
+                            </Button>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </Card>
+                )}
 
                 <Button variant="ghost" className="w-full" onClick={generate}>
                   ↺ Regenerate

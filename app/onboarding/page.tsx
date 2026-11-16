@@ -1,709 +1,548 @@
 "use client";
-import { useState, useRef, useCallback } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useDropzone } from "react-dropzone";
+import clsx from "clsx";
+import { Check, FileUp, RefreshCw, Sprout, Store, X } from "lucide-react";
 import AppShell from "@/components/layout/AppShell";
-import { useStore } from "@/lib/store";
-import { Button, Input, Card, Chip, SectionLabel, PageHeader } from "@/components/ui";
-import type { Brand, BrandDNA } from "@/lib/types";
+import { Button, Input, Textarea } from "@/components/ui";
+import { ChipGroup, ChoiceCard, LiveFindings, OnboardingShell, Question, TierCards } from "@/components/onboarding/kit";
+import { BrandPostPreview, PaletteStrip } from "@/components/brand/BrandPreview";
+import { afterSync, useStore } from "@/lib/store";
+import { track } from "@/lib/track";
+import { emptyModel, AGE_GROUPS, MOMENTS, MOTIVATIONS, type Affluence, type AgeGroup, type BrandModel, type CityTier, type Gender, type Moment, type Motivation } from "@/lib/brand/model";
+import { mergePatch } from "@/lib/brand/merge";
+import { AFFLUENCE_OPTIONS, AGE_LABELS, CITY_TIER_LABELS, GENDER_OPTIONS, LANGUAGE_OPTIONS, MOMENT_LABELS, MOTIVATION_LABELS } from "@/lib/brand/audience";
+import { scorePersonality, THIS_OR_THAT } from "@/lib/brand/personality";
+import { directionToPatch } from "@/lib/brand/build";
+import { imageFileToBase64, pdfToBase64Pages, runPipeline, runStage } from "@/lib/brand/client";
+import type { Finding } from "@/lib/brand/stages/types";
+import type { Direction } from "@/lib/brand/stages/directions";
 
-type Step = "brands" | "sources" | "analysing" | "styleguide" | "sample";
+type Door = "analyse" | "build" | "refine";
+type Step = "start" | "sources" | "reading" | "basics" | "audience" | "why" | "personality" | "directions" | "finishing";
 
-const STEPS: Step[] = ["brands", "sources", "analysing", "styleguide", "sample"];
-const STEP_LABELS: Record<Step, string> = {
-  brands: "Brands",
-  sources: "Sources",
-  analysing: "Analysing",
-  styleguide: "Style Guide",
-  sample: "Sample Post",
-};
+const BUILD_STEPS: Step[] = ["basics", "audience", "why", "personality", "directions"];
+const REFINE_STEPS: Step[] = ["sources", "audience", "why", "personality", "directions"];
 
-interface LogEntry { msg: string; type: "info" | "success" | "error" | "accent" | "warn"; }
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-// Browser-side PDF → base64 JPEG pages using PDF.js
-async function pdfToBase64Pages(
-  file: File,
-  maxPages = 8,
-  onProgress?: (msg: string) => void
-): Promise<{ images: string[]; totalPages: number }> {
-  if (!window.pdfjsLib) {
-    await new Promise<void>((resolve, reject) => {
-      const s = document.createElement("script");
-      s.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
-      s.onload = () => resolve();
-      s.onerror = () => reject(new Error("Failed to load PDF.js"));
-      document.head.appendChild(s);
-    });
-  }
-  (window as any).pdfjsLib.GlobalWorkerOptions.workerSrc =
-    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-
-  const ab = await file.arrayBuffer();
-  const pdf = await (window as any).pdfjsLib.getDocument({ data: ab }).promise;
-  const totalPages: number = pdf.numPages;
-  const pagesToRender = Math.min(totalPages, maxPages);
-  const images: string[] = [];
-
-  for (let i = 1; i <= pagesToRender; i++) {
-    onProgress?.(`Rendering page ${i} of ${pagesToRender}…`);
-    const page = await pdf.getPage(i);
-    const viewport = page.getViewport({ scale: 1.8 });
-    const canvas = document.createElement("canvas");
-    canvas.width = viewport.width;
-    canvas.height = viewport.height;
-    await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
-    images.push(canvas.toDataURL("image/jpeg", 0.88).split(",")[1]);
-  }
-  return { images, totalPages };
+interface Answers {
+  offering: string;
+  category: string;
+  countries: string;
+  cityTiers: CityTier[];
+  languages: string[];
+  gender: Gender[];
+  ageGroups: AgeGroup[];
+  affluence?: Affluence;
+  motivations: Motivation[];
+  moments: Moment[];
+  competitors: string;
+  personality: Record<string, "a" | "b" | undefined>;
 }
 
+const EMPTY_ANSWERS: Answers = {
+  offering: "",
+  category: "",
+  countries: "India",
+  cityTiers: [],
+  languages: ["English"],
+  gender: [],
+  ageGroups: [],
+  motivations: [],
+  moments: [],
+  competitors: "",
+  personality: {},
+};
+
 export default function OnboardingPage() {
-  const { brands, addBrand, updateBrand, getActiveBrand } = useStore();
-  const [step, setStep] = useState<Step>("brands");
-  const [newBrandName, setNewBrandName] = useState("");
-  const [editingBrandId, setEditingBrandId] = useState<string | null>(null);
+  const router = useRouter();
+  const saveBrandModel = useStore((s) => s.saveBrandModel);
+
+  const [step, setStep] = useState<Step>("start");
+  const [door, setDoor] = useState<Door | null>(null);
+  const [name, setName] = useState("");
+
+  // Door A sources
   const [websiteUrl, setWebsiteUrl] = useState("");
   const [igHandle, setIgHandle] = useState("");
-  const [pdfFile, setPdfFile] = useState<File | null>(null);
-  const [pdfMeta, setPdfMeta] = useState<{ name: string; size: string; totalPages: number | string } | null>(null);
-  const [log, setLog] = useState<LogEntry[]>([]);
-  const [dna, setDna] = useState<BrandDNA | null>(null);
-  const [samplePost, setSamplePost] = useState<any>(null);
-  const [loadingSample, setLoadingSample] = useState(false);
-  const [analysing, setAnalysing] = useState(false);
-  const logRef = useRef<HTMLDivElement>(null);
+  const [files, setFiles] = useState<File[]>([]);
 
-  const addLog = (msg: string, type: LogEntry["type"] = "info") => {
-    setLog((l) => [...l, { msg, type }]);
-    setTimeout(() => {
-      if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-    }, 50);
-  };
+  // Running state
+  const [findings, setFindings] = useState<Finding[]>([]);
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [model, setModel] = useState<BrandModel | null>(null);
 
-  // Dropzone
-  const onDrop = useCallback(async (files: File[]) => {
-    const f = files[0];
-    if (!f) return;
-    setPdfFile(f);
-    setPdfMeta({ name: f.name, size: (f.size / 1024).toFixed(0), totalPages: "…" });
-    try {
-      if (!window.pdfjsLib) {
-        await new Promise<void>((resolve, reject) => {
-          const s = document.createElement("script");
-          s.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
-          s.onload = () => resolve();
-          s.onerror = () => reject();
-          document.head.appendChild(s);
-        });
-      }
-      (window as any).pdfjsLib.GlobalWorkerOptions.workerSrc =
-        "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-      const ab = await f.arrayBuffer();
-      const pdf = await (window as any).pdfjsLib.getDocument({ data: ab }).promise;
-      setPdfMeta({ name: f.name, size: (f.size / 1024).toFixed(0), totalPages: pdf.numPages });
-    } catch {
-      setPdfMeta((m) => m ? { ...m, totalPages: "?" } : null);
-    }
-  }, []);
+  // Door B answers + directions
+  const [answers, setAnswers] = useState<Answers>(EMPTY_ANSWERS);
+  const [directions, setDirections] = useState<Direction[] | null>(null);
+  const [picked, setPicked] = useState<string | null>(null);
+  const [seed, setSeed] = useState(1);
+  const abortRef = useRef<AbortController | null>(null);
 
+  useEffect(() => () => abortRef.current?.abort(), []);
+  // Funnel: which step people reach, and on which door.
+  useEffect(() => {
+    track("onboarding_step", { props: { step, door } });
+  }, [step, door]);
+
+  const set = <K extends keyof Answers>(k: K, v: Answers[K]) => setAnswers((a) => ({ ...a, [k]: v }));
+
+  const flow = door === "build" ? BUILD_STEPS : door === "refine" ? REFINE_STEPS : [];
+  const stepNo = flow.indexOf(step) + 1 || undefined;
+
+  // ── Dropzone (PDF or screenshots) ────────────────────────────────────────
+  const onDrop = useCallback((accepted: File[]) => setFiles((f) => [...f, ...accepted].slice(0, 9)), []);
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
-    accept: { "application/pdf": [".pdf"] },
-    maxFiles: 1,
+    accept: { "application/pdf": [".pdf"], "image/*": [".png", ".jpg", ".jpeg", ".webp"] },
+    maxFiles: 9,
   });
 
-  // ── Analysis pipeline ──────────────────────────────────────────────────
-  const runAnalysis = async () => {
-    setAnalysing(true);
-    setLog([]);
-    setStep("analysing");
-    const brandName = newBrandName.trim();
-    let pdfInsights: Record<string, unknown> | null = null;
+  // ── Door A: read sources ────────────────────────────────────────────────
+  const readBrand = async () => {
+    setError(null);
+    setFindings([]);
+    setRunning(true);
+    setStep("reading");
+    const controller = new AbortController();
+    abortRef.current = controller;
+    try {
+      let images: string[] = [];
+      let imageSource: "pdf" | "instagram" | "upload" = "upload";
+      const pdf = files.find((f) => f.type === "application/pdf");
+      const pics = files.filter((f) => f.type.startsWith("image/"));
+      if (pdf) {
+        setFindings([{ id: "prep", label: `Opening ${pdf.name}`, status: "info" }]);
+        images = (await pdfToBase64Pages(pdf, 6)).images;
+        imageSource = "pdf";
+      }
+      if (pics.length) {
+        images = [...images, ...(await Promise.all(pics.slice(0, 8 - images.length).map((f) => imageFileToBase64(f))))];
+        if (!pdf) imageSource = igHandle ? "instagram" : "upload";
+      }
+      const base = emptyModel(name.trim(), door === "refine" ? "refine" : "analyse");
+      const result = await runPipeline(
+        "analyse",
+        base,
+        { websiteUrl: websiteUrl.trim() || undefined, igHandle: igHandle.trim() || undefined, images, imageSource },
+        setFindings,
+        controller.signal
+      );
+      setFindings(result.findings);
+      setModel(result.model);
+      setRunning(false);
+      if (door === "refine") {
+        // Prefill the interview with what we found, then continue the Build path.
+        const a = result.model.strategy.audience;
+        setAnswers((prev) => ({
+          ...prev,
+          offering: result.model.strategy.offering,
+          category: result.model.strategy.category,
+          gender: a.gender ? [a.gender] : [],
+          ageGroups: a.ageGroups,
+          affluence: a.affluence,
+          languages: a.languages.length ? a.languages : prev.languages,
+          cityTiers: a.markets.cityTiers,
+          motivations: a.motivations,
+          moments: a.moments,
+        }));
+        setStep("audience");
+      } else {
+        saveBrandModel(
+          result.model,
+          {
+            website: websiteUrl.trim() || undefined,
+            instagram: igHandle.trim() || undefined,
+            pdfName: pdf?.name,
+          },
+          { source: "stage", stageId: "pipeline:analyse" }
+        );
+        router.push("/brand?welcome=1");
+      }
+    } catch (err) {
+      setRunning(false);
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
 
-    addLog("Initialising Brand Intelligence Engine…");
-    await sleep(400);
+  // ── Door B: answers → model ─────────────────────────────────────────────
+  const modelFromAnswers = useCallback((): BrandModel => {
+    const base = model ?? emptyModel(name.trim(), door === "refine" ? "refine" : "build");
+    const countries = answers.countries.split(",").map((c) => c.trim()).filter(Boolean);
+    return mergePatch(
+      base,
+      {
+        name: name.trim(),
+        strategy: {
+          offering: answers.offering,
+          category: answers.category,
+          competitors: answers.competitors.split(",").map((c) => c.trim()).filter(Boolean),
+          audience: {
+            gender: answers.gender[0],
+            ageGroups: answers.ageGroups,
+            affluence: answers.affluence,
+            markets: { countries, cityTiers: answers.cityTiers },
+            languages: answers.languages,
+            motivations: answers.motivations,
+            moments: answers.moments,
+          },
+        },
+        personality: scorePersonality(answers.personality),
+      },
+      { source: "user", confidence: 1 }
+    ).model;
+  }, [answers, door, model, name]);
 
-    // PDF path: rasterise → Claude Vision via API
-    if (pdfFile) {
-      addLog(`📄 PDF detected: "${pdfMeta?.name}" (${pdfMeta?.totalPages} pages)`);
-      await sleep(300);
-      addLog("Rasterising pages — capturing raster + vector + layered content…");
-      try {
-        const { images, totalPages } = await pdfToBase64Pages(pdfFile, 8, (msg) => addLog(msg));
-        addLog(`✓ ${images.length}/${totalPages} pages rendered. Sending to Claude Vision…`, "accent");
-        const res = await fetch("/api/analyse-pdf", {
+  const designDirections = async (nextSeed = seed) => {
+    setError(null);
+    setDirections(null);
+    setPicked(null);
+    setStep("directions");
+    setRunning(true);
+    try {
+      const m = modelFromAnswers();
+      const res = await runStage("directions", m, { seed: nextSeed });
+      setDirections((res.output.directions as Direction[]) ?? []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+    setRunning(false);
+  };
+
+  const finishBuild = async () => {
+    const d = directions?.find((x) => x.id === picked);
+    if (!d) return;
+    setError(null);
+    setStep("finishing");
+    setRunning(true);
+    setFindings([]);
+    try {
+      const withAnswers = modelFromAnswers();
+      const chosen = mergePatch(withAnswers, directionToPatch(d), { source: "user", confidence: 1 }).model;
+      const result = await runPipeline("build", chosen, {}, setFindings);
+      saveBrandModel(result.model, door === "refine" ? { website: websiteUrl.trim() || undefined, instagram: igHandle.trim() || undefined } : {}, { source: "build" });
+      // Every direction shown + the one picked: preference data for improving directions later.
+      const brandId = result.model.id;
+      afterSync(brandId).then(() =>
+        fetch("/api/build-sessions", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ pages: images, brandName }),
-        });
-        const data = await res.json();
-        pdfInsights = data.insights ?? null;
-        if (pdfInsights) addLog(`✓ PDF visual analysis complete`, "success");
-        else addLog("PDF analysis returned unexpected format — continuing", "warn");
-      } catch (err: any) {
-        addLog(`PDF error: ${err.message}`, "error");
-      }
-      await sleep(300);
+          body: JSON.stringify({ brandId, answers, directions, selectedIndex: directions?.findIndex((x) => x.id === d.id) ?? null }),
+          keepalive: true,
+        }).catch(() => undefined)
+      );
+      router.push("/brand?welcome=1");
+    } catch (err) {
+      setRunning(false);
+      setError(err instanceof Error ? err.message : String(err));
     }
-
-    if (websiteUrl) {
-      addLog(`🌐 Crawling website: ${websiteUrl}`);
-      await sleep(600);
-      addLog("Extracting colours, imagery & copy…");
-      await sleep(500);
-    }
-    if (igHandle) {
-      addLog(`📸 Analysing Instagram: @${igHandle}`);
-      await sleep(600);
-      addLog("Sampling posts, captions & hashtag patterns…");
-      await sleep(400);
-    }
-
-    addLog("Synthesising all sources into Brand DNA…", "accent");
-
-    const res = await fetch("/api/analyse-brand", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ brandName, websiteUrl, igHandle, pdfInsights }),
-    });
-    const data = await res.json();
-
-    if (data.dna) {
-      addLog("Brand DNA profile built ✓", "success");
-      setDna(data.dna);
-      await sleep(400);
-      setStep("styleguide");
-    } else {
-      addLog("Error building Brand DNA — please retry.", "error");
-    }
-    setAnalysing(false);
   };
 
-  // ── Sample post ────────────────────────────────────────────────────────
-  const generateSample = async () => {
-    if (!dna) return;
-    setLoadingSample(true);
-    setSamplePost(null);
-    const res = await fetch("/api/generate-post", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        brandDNA: dna,
-        template: "product_launch",
-        platforms: ["instagram"],
-        topic: "brand introduction",
-      }),
-    });
-    const data = await res.json();
-    setSamplePost(data.post ?? null);
-    setLoadingSample(false);
-  };
+  const canRead = name.trim() && (websiteUrl.trim() || igHandle.trim() || files.length);
+  const personalityAnswered = useMemo(() => Object.values(answers.personality).filter(Boolean).length, [answers.personality]);
 
-  // ── Save brand ─────────────────────────────────────────────────────────
-  const saveBrand = () => {
-    if (!dna) return;
-    const brand: Brand = {
-      id: editingBrandId ?? `brand_${Date.now()}`,
-      name: dna.brandName,
-      dna,
-      sources: {
-        website: websiteUrl || undefined,
-        instagram: igHandle || undefined,
-        pdfName: pdfMeta?.name,
-        pdfPages: typeof pdfMeta?.totalPages === "number" ? pdfMeta.totalPages : undefined,
-      },
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    if (editingBrandId) updateBrand(editingBrandId, brand);
-    else addBrand(brand);
-    setStep("brands");
-    setNewBrandName("");
-    setWebsiteUrl("");
-    setIgHandle("");
-    setPdfFile(null);
-    setPdfMeta(null);
-    setDna(null);
-    setSamplePost(null);
-  };
-
-  const startNew = () => {
-    setNewBrandName("");
-    setWebsiteUrl("");
-    setIgHandle("");
-    setPdfFile(null);
-    setPdfMeta(null);
-    setDna(null);
-    setSamplePost(null);
-    setEditingBrandId(null);
-    setStep("sources");
-  };
-
-  const canAnalyse = (websiteUrl.trim() || igHandle.trim() || pdfFile) && newBrandName.trim();
-
-  const stepIndex = STEPS.indexOf(step);
-
+  // ── Screens ──────────────────────────────────────────────────────────────
   return (
     <AppShell>
-      <div className="p-8 max-w-4xl mx-auto">
-        {/* Step indicator */}
-        <div className="flex items-center gap-2 mb-10">
-          {STEPS.filter((s) => s !== "analysing").map((s, i) => {
-            const visibleSteps = STEPS.filter((x) => x !== "analysing");
-            const isActive = step === s || (step === "analysing" && s === "sources");
-            const isDone =
-              visibleSteps.indexOf(s) <
-              visibleSteps.indexOf(
-                step === "analysing" ? "styleguide" : step
-              );
-            return (
-              <div key={s} className="flex items-center gap-2">
-                <div
-                  className={`w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold transition-all ${
-                    isDone
-                      ? "bg-success text-white"
-                      : isActive
-                      ? "bg-accent text-white"
-                      : "bg-border text-text-muted"
-                  }`}
-                >
-                  {isDone ? "✓" : i + 1}
-                </div>
-                <span
-                  className={`text-xs font-medium ${
-                    isActive ? "text-text" : isDone ? "text-success" : "text-text-muted"
-                  }`}
-                >
-                  {STEP_LABELS[s]}
-                </span>
-                {i < visibleSteps.length - 1 && (
-                  <div className="w-8 h-px bg-border mx-1" />
-                )}
-              </div>
-            );
-          })}
-        </div>
-
-        {/* ── BRANDS ── */}
-        {step === "brands" && (
-          <div className="animate-fade-up">
-            <PageHeader
-              title="Brand Intelligence"
-              subtitle="Build a Brand DNA profile from your website, Instagram, and product catalogues."
+      {step === "start" && (
+        <OnboardingShell
+          title="Set up your brand"
+          subtitle="Brandly learns your brand once, so every post it writes sounds and looks like you."
+          primary={{
+            label: "Continue",
+            disabled: !name.trim() || !door,
+            onClick: () => setStep(door === "build" ? "basics" : "sources"),
+          }}
+        >
+          <Input label="Brand name" placeholder="e.g. Chai Point" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+          <div className="mt-8 space-y-3">
+            <p className="text-sm font-medium">Where are you starting from?</p>
+            <ChoiceCard
+              icon={<Store size={20} strokeWidth={1.75} />}
+              title="I have a website or Instagram"
+              description="Brandly reads what you already have: colours, fonts, logo and how you write."
+              selected={door === "analyse"}
+              onClick={() => setDoor("analyse")}
             />
-            <div className="grid grid-cols-3 gap-4">
-              {brands.map((b) => (
-                <Card
-                  key={b.id}
-                  hover
-                  className="p-5"
-                  onClick={() => {
-                    setEditingBrandId(b.id);
-                    setNewBrandName(b.name);
-                    setWebsiteUrl(b.sources.website ?? "");
-                    setIgHandle(b.sources.instagram ?? "");
-                    setDna(b.dna);
-                    setStep("styleguide");
-                  }}
-                >
-                  <div
-                    className="w-10 h-10 rounded-xl mb-3"
-                    style={{
-                      background: `linear-gradient(135deg, ${b.dna.colors.primary}, ${b.dna.colors.secondary})`,
-                    }}
-                  />
-                  <p className="font-semibold mb-1 truncate">{b.name}</p>
-                  <p className="text-xs text-text-muted mb-3 truncate">{b.dna.vibe.slice(0, 2).join(" · ")}</p>
-                  <div className="flex gap-1.5 flex-wrap">
-                    {b.sources.website && <Chip variant="neutral" className="text-[10px]">🌐 Web</Chip>}
-                    {b.sources.instagram && <Chip variant="neutral" className="text-[10px]">📸 IG</Chip>}
-                    {b.sources.pdfName && <Chip variant="neutral" className="text-[10px]">📄 PDF</Chip>}
-                  </div>
-                </Card>
-              ))}
-              <Card className="p-5 border-dashed">
-                <SectionLabel>New Brand</SectionLabel>
-                <Input
-                  placeholder="Brand name…"
-                  value={newBrandName}
-                  onChange={(e) => setNewBrandName(e.target.value)}
-                  className="mb-3"
-                />
-                <Button
-                  className="w-full"
-                  disabled={!newBrandName.trim()}
-                  onClick={() => setStep("sources")}
-                >
-                  + Create
-                </Button>
-              </Card>
-            </div>
-          </div>
-        )}
-
-        {/* ── SOURCES ── */}
-        {step === "sources" && (
-          <div className="animate-fade-up">
+            <ChoiceCard
+              icon={<Sprout size={20} strokeWidth={1.75} />}
+              title="I'm starting from scratch"
+              description="Answer a few quick questions and pick from three brand directions."
+              selected={door === "build"}
+              onClick={() => setDoor("build")}
+            />
             <button
-              onClick={() => setStep("brands")}
-              className="text-sm text-text-muted hover:text-text mb-6 flex items-center gap-1"
+              onClick={() => setDoor("refine")}
+              aria-pressed={door === "refine"}
+              className={clsx(
+                "text-sm underline-offset-4 hover:underline pt-1",
+                door === "refine" ? "text-text font-medium" : "text-text-muted"
+              )}
             >
-              ← Back
+              {door === "refine" && <Check size={14} className="inline mr-1 -mt-0.5" />}I have a website, but no real brand yet
             </button>
-            <PageHeader
-              title={`Sources for ${newBrandName}`}
-              subtitle="Provide any combination — more sources means richer Brand DNA."
-            />
+          </div>
+        </OnboardingShell>
+      )}
 
-            <div className="space-y-4">
-              {/* Website */}
-              <Card className="p-6">
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="w-9 h-9 rounded-lg bg-blue-900/40 flex items-center justify-center text-xl">🌐</div>
-                  <div>
-                    <p className="font-semibold text-sm">Website</p>
-                    <p className="text-xs text-text-muted">Homepage, about, product & service pages</p>
-                  </div>
-                </div>
-                <Input placeholder="https://yourbrand.com" value={websiteUrl} onChange={(e) => setWebsiteUrl(e.target.value)} />
-              </Card>
-
-              {/* Instagram */}
-              <Card className="p-6">
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="w-9 h-9 rounded-lg bg-purple-900/40 flex items-center justify-center text-xl">📸</div>
-                  <div>
-                    <p className="font-semibold text-sm">Instagram</p>
-                    <p className="text-xs text-text-muted">Recent posts, captions, visual style & hashtags</p>
-                  </div>
-                </div>
-                <Input placeholder="yourhandle" prefix="@" value={igHandle} onChange={(e) => setIgHandle(e.target.value)} />
-              </Card>
-
-              {/* PDF */}
-              <Card className="p-6">
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="w-9 h-9 rounded-lg bg-emerald-900/40 flex items-center justify-center text-xl">📄</div>
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <p className="font-semibold text-sm">PDF Catalogue</p>
-                      <Chip variant="success" className="text-[10px]">NEW</Chip>
-                    </div>
-                    <p className="text-xs text-text-muted">Raster images + vector layers both extracted</p>
-                  </div>
-                </div>
-
-                <div
-                  {...getRootProps()}
-                  className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all ${
-                    isDragActive ? "border-accent bg-accent/5" : "border-border hover:border-accent/50"
-                  }`}
-                >
-                  <input {...getInputProps()} />
-                  <div className="text-3xl mb-2">📂</div>
-                  <p className="font-medium text-sm mb-1">Drop PDF here or click to browse</p>
-                  <p className="text-xs text-text-muted">Up to 8 pages · Raster + vector layers captured</p>
-                </div>
-
-                {pdfMeta && (
-                  <div className="flex items-center gap-3 mt-3 p-3 bg-success/5 border border-success/20 rounded-xl">
-                    <span className="text-xl">📄</span>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold text-success truncate">{pdfMeta.name}</p>
-                      <p className="text-xs text-text-muted">{pdfMeta.totalPages} pages · {pdfMeta.size} KB</p>
-                    </div>
-                    <button onClick={() => { setPdfFile(null); setPdfMeta(null); }} className="text-text-muted hover:text-error text-xl leading-none">×</button>
-                  </div>
+      {step === "sources" && (
+        <OnboardingShell
+          step={stepNo}
+          total={flow.length || undefined}
+          title={door === "refine" ? "Show us what you have" : "Where can we find your brand?"}
+          subtitle="Add at least one. The more you add, the better the match."
+          onBack={() => setStep("start")}
+          primary={{ label: "Read my brand", onClick: readBrand, disabled: !canRead }}
+        >
+          <div className="space-y-5">
+            <Input label="Website" placeholder="yourbrand.com" value={websiteUrl} onChange={(e) => setWebsiteUrl(e.target.value)} inputMode="url" />
+            <Input label="Instagram handle" placeholder="yourbrand" prefix="@" value={igHandle} onChange={(e) => setIgHandle(e.target.value.replace(/^@/, ""))} />
+            <div>
+              <p className="text-sm font-medium mb-1.5">Catalogue PDF or post screenshots</p>
+              <p className="text-xs text-text-muted mb-2">
+                Instagram doesn&apos;t let apps read posts directly, so 4–6 screenshots of your grid help a lot.
+              </p>
+              <div
+                {...getRootProps()}
+                className={clsx(
+                  "rounded-xl border border-dashed p-6 text-center cursor-pointer transition-colors",
+                  isDragActive ? "border-text bg-text/[0.03]" : "border-border hover:border-text/30"
                 )}
-
-                <div className="mt-4 p-4 bg-surface rounded-xl space-y-2">
-                  <SectionLabel>What gets extracted</SectionLabel>
-                  {[
-                    ["🖼️", "Raster images", "Embedded photos & JPEGs"],
-                    ["🎨", "Vector layers", "Shapes, illustrations & layered design (via page rasterisation)"],
-                    ["🔤", "Typography", "Font styles, weights & hierarchy"],
-                    ["🎯", "Colour palette", "Exact hex colours from all visual elements"],
-                    ["📐", "Layout & motifs", "Grid patterns & recurring brand signatures"],
-                  ].map(([icon, label, desc]) => (
-                    <div key={label as string} className="flex gap-2 text-xs">
-                      <span className="shrink-0">{icon}</span>
-                      <span>
-                        <span className="font-semibold text-text">{label as string}</span>
-                        <span className="text-text-muted"> — {desc as string}</span>
-                      </span>
-                    </div>
+              >
+                <input {...getInputProps()} />
+                <FileUp size={20} className="mx-auto text-text-muted" />
+                <p className="text-sm mt-2">Drop files here or click to choose</p>
+                <p className="text-xs text-text-muted mt-0.5">PDF, PNG or JPG. Up to 9 files.</p>
+              </div>
+              {files.length > 0 && (
+                <ul className="mt-3 space-y-1.5">
+                  {files.map((f, i) => (
+                    <li key={i} className="flex items-center gap-2 text-sm bg-card border border-border rounded-lg px-3 h-9">
+                      <span className="truncate flex-1">{f.name}</span>
+                      <span className="text-xs text-text-muted">{(f.size / 1024).toFixed(0)} KB</span>
+                      <button onClick={() => setFiles((fs) => fs.filter((_, j) => j !== i))} aria-label={`Remove ${f.name}`} className="text-text-muted hover:text-text">
+                        <X size={14} />
+                      </button>
+                    </li>
                   ))}
-                </div>
-              </Card>
-
-              {/* Skip */}
-              <Card className="p-4 flex items-center justify-between">
-                <div>
-                  <p className="font-medium text-sm">Skip & provide context manually</p>
-                  <p className="text-xs text-text-muted">Describe your brand yourself</p>
-                </div>
-                <Button variant="ghost" size="sm">Manual →</Button>
-              </Card>
-            </div>
-
-            <div className="flex justify-end items-center gap-3 mt-6">
-              {!canAnalyse && <span className="text-xs text-text-muted">Add a brand name and at least one source</span>}
-              <Button disabled={!canAnalyse} onClick={runAnalysis}>Analyse Brand →</Button>
+                </ul>
+              )}
             </div>
           </div>
-        )}
+        </OnboardingShell>
+      )}
 
-        {/* ── ANALYSING ── */}
-        {step === "analysing" && (
-          <div className="animate-fade-up flex flex-col items-center pt-12">
-            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-accent to-accent-light flex items-center justify-center text-3xl mb-6 animate-spin-slow">
-              ✦
-            </div>
-            <h2 className="font-display text-3xl font-bold mb-2">Analysing Your Brand</h2>
-            <p className="text-text-muted mb-8">
-              {pdfFile ? "PDF pages being rendered via Claude Vision — ~20–35s" : "Synthesising your sources…"}
-            </p>
-            <div
-              ref={logRef}
-              className="w-full max-w-xl bg-surface border border-border rounded-xl p-5 max-h-80 overflow-y-auto space-y-2.5"
-            >
-              {log.map((l, i) => (
-                <div key={i} className="flex items-center gap-2.5 text-sm animate-fade-up">
-                  <span className={
-                    l.type === "success" ? "text-success" :
-                    l.type === "error" ? "text-error" :
-                    l.type === "warn" ? "text-warn" :
-                    l.type === "accent" ? "text-accent-light" : "text-text-muted"
-                  }>
-                    {l.type === "success" ? "✓" : l.type === "error" ? "✗" : l.type === "accent" ? "✦" : "·"}
-                  </span>
-                  <span className={
-                    l.type === "success" ? "text-success" :
-                    l.type === "error" ? "text-error" :
-                    l.type === "accent" ? "text-accent-light" : "text-text"
-                  }>{l.msg}</span>
-                  {i === log.length - 1 && analysing && (
-                    <span className="ml-auto w-2 h-2 rounded-full bg-accent animate-pulse-dot" />
-                  )}
+      {step === "reading" && (
+        <OnboardingShell
+          title={running ? `Reading ${name}` : error ? "That didn't work" : "Done"}
+          subtitle={running ? "This takes about 20–40 seconds. Here's what we've found so far." : undefined}
+          onBack={running ? undefined : () => setStep("sources")}
+          primary={error ? { label: "Try again", onClick: readBrand } : undefined}
+        >
+          <LiveFindings findings={findings} running={running} />
+          {error && <p className="mt-4 text-sm text-error">{error}</p>}
+        </OnboardingShell>
+      )}
+
+      {step === "basics" && (
+        <OnboardingShell
+          step={stepNo}
+          total={flow.length}
+          title="What do you sell, and where?"
+          onBack={() => setStep("start")}
+          primary={{ label: "Continue", onClick: () => setStep("audience"), disabled: !answers.offering.trim() }}
+        >
+          <Question title="What do you sell?" hint="Plain words are best. e.g. “Handmade soy candles and gift boxes”">
+            <Textarea rows={2} value={answers.offering} onChange={(e) => set("offering", e.target.value)} placeholder="We sell…" />
+          </Question>
+          <Question title="Which country or countries?">
+            <Input value={answers.countries} onChange={(e) => set("countries", e.target.value)} placeholder="India" />
+          </Question>
+          <Question title="Where are most customers?" hint="Pick all that apply">
+            <ChipGroup
+              multi
+              options={(Object.keys(CITY_TIER_LABELS) as CityTier[]).map((v) => ({ value: v, label: CITY_TIER_LABELS[v] }))}
+              value={answers.cityTiers}
+              onChange={(v) => set("cityTiers", v)}
+            />
+          </Question>
+          <Question title="Which language should posts be in?" hint="Pick all that apply">
+            <ChipGroup multi options={LANGUAGE_OPTIONS.map((l) => ({ value: l, label: l }))} value={answers.languages} onChange={(v) => set("languages", v)} />
+          </Question>
+        </OnboardingShell>
+      )}
+
+      {step === "audience" && (
+        <OnboardingShell
+          step={stepNo}
+          total={flow.length}
+          title="Who buys from you?"
+          subtitle={door === "refine" ? "We guessed from your website. Fix anything that's off." : "This shapes your colours, voice and where you post."}
+          onBack={() => setStep(door === "build" ? "basics" : "sources")}
+          primary={{ label: "Continue", onClick: () => setStep("why") }}
+          secondary={{ label: "Not sure, let Brandly suggest", onClick: () => setStep("why") }}
+        >
+          <Question title="Mostly…">
+            <ChipGroup options={GENDER_OPTIONS} value={answers.gender} onChange={(v) => set("gender", v)} />
+          </Question>
+          <Question title="Which age groups?" hint="Pick all that apply">
+            <ChipGroup multi options={AGE_GROUPS.map((a) => ({ value: a, label: AGE_LABELS[a] }))} value={answers.ageGroups} onChange={(v) => set("ageGroups", v)} />
+          </Question>
+          <Question title="How do your customers spend?">
+            <TierCards options={AFFLUENCE_OPTIONS} value={answers.affluence} onChange={(v) => set("affluence", v)} />
+          </Question>
+        </OnboardingShell>
+      )}
+
+      {step === "why" && (
+        <OnboardingShell
+          step={stepNo}
+          total={flow.length}
+          title="Why and when do people buy?"
+          onBack={() => setStep("audience")}
+          primary={{ label: "Continue", onClick: () => setStep("personality") }}
+          secondary={{ label: "Not sure, let Brandly suggest", onClick: () => setStep("personality") }}
+        >
+          <Question title="Why do they buy from you?" hint="Pick up to 2">
+            <ChipGroup multi max={2} options={MOTIVATIONS.map((m) => ({ value: m, label: MOTIVATION_LABELS[m] }))} value={answers.motivations} onChange={(v) => set("motivations", v)} />
+          </Question>
+          <Question title="When do they think of you?" hint="Pick all that apply">
+            <ChipGroup multi options={MOMENTS.map((m) => ({ value: m, label: MOMENT_LABELS[m] }))} value={answers.moments} onChange={(v) => set("moments", v)} />
+          </Question>
+          <Question title="Brands you admire or compete with" hint="Optional. Separate with commas.">
+            <Input value={answers.competitors} onChange={(e) => set("competitors", e.target.value)} placeholder="e.g. Chaayos, Blue Tokai" />
+          </Question>
+        </OnboardingShell>
+      )}
+
+      {step === "personality" && (
+        <OnboardingShell
+          step={stepNo}
+          total={flow.length}
+          title="Pick the one that's more you"
+          subtitle="Go with your gut. Skip any that don't fit."
+          onBack={() => setStep("why")}
+          primary={{ label: "Show me directions", onClick: () => designDirections(), disabled: personalityAnswered < 3 }}
+        >
+          <div className="space-y-6">
+            {THIS_OR_THAT.map((pair) => (
+              <div key={pair.id}>
+                <p className="text-sm font-medium mb-2">{pair.question}</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {(["a", "b"] as const).map((side) => {
+                    const opt = pair[side];
+                    const on = answers.personality[pair.id] === side;
+                    return (
+                      <button
+                        key={side}
+                        onClick={() => set("personality", { ...answers.personality, [pair.id]: on ? undefined : side })}
+                        aria-pressed={on}
+                        className={clsx(
+                          "text-left rounded-xl border p-3.5 transition-colors bg-card",
+                          on ? "border-text ring-1 ring-text" : "border-border hover:border-text/30"
+                        )}
+                      >
+                        <span className="block text-sm font-medium">{opt.label}</span>
+                        <span className="block text-xs text-text-muted mt-1">{opt.example}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+          {personalityAnswered < 3 && <p className="mt-6 text-xs text-text-muted">Answer at least 3 to continue.</p>}
+        </OnboardingShell>
+      )}
+
+      {step === "directions" && (
+        <OnboardingShell
+          wide
+          step={stepNo}
+          total={flow.length}
+          title="Pick a starting direction"
+          subtitle="You can change colours, fonts and voice afterwards."
+          onBack={() => setStep("personality")}
+          primary={directions ? { label: "Use this direction", onClick: finishBuild, disabled: !picked } : undefined}
+          secondary={
+            directions
+              ? {
+                  label: "Show me three different ones",
+                  onClick: () => {
+                    setSeed((s) => s + 1);
+                    designDirections(seed + 1);
+                  },
+                }
+              : undefined
+          }
+        >
+          {running && !directions && (
+            <div className="grid gap-4 sm:grid-cols-3">
+              {[0, 1, 2].map((i) => (
+                <div key={i} className="rounded-2xl border border-border bg-card p-4 space-y-3">
+                  <div className="h-10 rounded-lg bg-text/5 animate-pulse" />
+                  <div className="aspect-square rounded-xl bg-text/5 animate-pulse" />
+                  <div className="h-4 w-2/3 rounded bg-text/5 animate-pulse" />
                 </div>
               ))}
+              <p className="sm:col-span-3 text-sm text-text-muted">Designing three directions. About 15 seconds.</p>
             </div>
-          </div>
-        )}
-
-        {/* ── STYLE GUIDE ── */}
-        {step === "styleguide" && dna && (
-          <div className="animate-fade-up">
-            <div className="flex items-start justify-between mb-6 flex-wrap gap-4">
-              <div>
-                <Chip variant="success" className="mb-2">✓ Brand DNA Built</Chip>
-                <h1 className="font-display text-3xl font-bold">{dna.brandName}</h1>
-                <p className="text-text-muted mt-1.5 text-sm max-w-lg">{dna.one_liner}</p>
-              </div>
-              <Button onClick={() => { generateSample(); setStep("sample"); }}>
-                Validate with Sample Post →
+          )}
+          {error && (
+            <div className="rounded-xl border border-error/30 p-4 text-sm">
+              <p className="text-error">{error}</p>
+              <Button variant="secondary" size="sm" className="mt-3" onClick={() => designDirections()}>
+                <RefreshCw size={14} /> Try again
               </Button>
             </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              {/* Colours */}
-              <Card className="p-5 col-span-2">
-                <SectionLabel>Colour Palette</SectionLabel>
-                <div className="flex gap-4 flex-wrap">
-                  {Object.entries(dna.colors).map(([name, hex]) => (
-                    <div key={name} className="flex flex-col items-center gap-2">
-                      <div
-                        className="w-14 h-14 rounded-xl border-2 border-border"
-                        style={{ background: hex, boxShadow: `0 4px 20px ${hex}60` }}
-                      />
-                      <span className="text-[11px] text-text-muted capitalize">{name}</span>
-                      <span className="text-[11px] font-semibold">{hex}</span>
-                    </div>
-                  ))}
-                </div>
-              </Card>
-
-              {/* Vibe */}
-              <Card className="p-5">
-                <SectionLabel>Brand Vibe</SectionLabel>
-                <div className="flex flex-wrap gap-2 mb-4">
-                  {dna.vibe.map((v) => <Chip key={v} variant="accent">{v}</Chip>)}
-                </div>
-                <p className="text-xs text-text-muted mb-1">Visual Style</p>
-                <p className="text-sm mb-3">{dna.visual_style}</p>
-                <p className="text-xs text-text-muted mb-1">Typography Feel</p>
-                <p className="text-sm">{dna.typography_feel}</p>
-              </Card>
-
-              {/* Audience */}
-              <Card className="p-5">
-                <SectionLabel>Audience & Tone</SectionLabel>
-                <p className="text-xs text-text-muted mb-1">Target Audience</p>
-                <p className="text-sm mb-4">{dna.target_audience}</p>
-                <p className="text-xs text-text-muted mb-1">Communication Tone</p>
-                <p className="text-sm">{dna.communication_tone}</p>
-              </Card>
-
-              {/* Products */}
-              <Card className="p-5">
-                <SectionLabel>Products & Services</SectionLabel>
-                <div className="flex flex-wrap gap-2">
-                  {dna.products_services.map((p) => <Chip key={p} variant="neutral">{p}</Chip>)}
-                </div>
-              </Card>
-
-              {/* Themes */}
-              <Card className="p-5">
-                <SectionLabel>Content Themes</SectionLabel>
-                <div className="space-y-2">
-                  {dna.content_themes.map((t, i) => (
-                    <div key={t} className="flex items-center gap-3">
-                      <div className="w-5 h-5 rounded-md bg-accent/10 text-accent-light text-[10px] font-bold flex items-center justify-center shrink-0">
-                        {i + 1}
-                      </div>
-                      <span className="text-sm">{t}</span>
-                    </div>
-                  ))}
-                </div>
-              </Card>
-
-              {/* Hashtags */}
-              <Card className="p-5">
-                <SectionLabel>Hashtag Clusters</SectionLabel>
-                <div className="flex flex-wrap gap-2">
-                  {dna.hashtag_clusters.map((h) => (
-                    <Chip key={h} variant="neutral" className="text-[11px]">{h}</Chip>
-                  ))}
-                </div>
-              </Card>
-
-              {/* Guidelines */}
-              <Card className="p-5 col-span-2">
-                <SectionLabel>Brand Guidelines</SectionLabel>
-                <div className="grid grid-cols-2 gap-6">
-                  <div>
-                    <p className="text-xs font-semibold text-success mb-3">✓ Always Do</p>
-                    {dna.do.map((d) => (
-                      <div key={d} className="flex gap-2 text-sm py-2 border-b border-border last:border-0">
-                        <span className="text-success shrink-0">→</span>{d}
-                      </div>
-                    ))}
-                  </div>
-                  <div>
-                    <p className="text-xs font-semibold text-error mb-3">✗ Never Do</p>
-                    {dna.dont.map((d) => (
-                      <div key={d} className="flex gap-2 text-sm py-2 border-b border-border last:border-0">
-                        <span className="text-error shrink-0">✗</span>{d}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </Card>
-            </div>
-
-            <div className="flex justify-end gap-3 mt-6">
-              <Button variant="ghost" onClick={() => setStep("sources")}>Re-analyse</Button>
-              <Button onClick={saveBrand}>Save Brand ✓</Button>
-              <Button onClick={() => { generateSample(); setStep("sample"); }}>
-                Validate with Sample Post →
-              </Button>
-            </div>
-          </div>
-        )}
-
-        {/* ── SAMPLE POST ── */}
-        {step === "sample" && (
-          <div className="animate-fade-up">
-            <button onClick={() => setStep("styleguide")} className="text-sm text-text-muted hover:text-text mb-6 flex items-center gap-1">
-              ← Back to Style Guide
-            </button>
-            <PageHeader title="Sample Post" subtitle="Generated using your Brand DNA. Does this feel right?" />
-
-            {loadingSample && (
-              <div className="flex flex-col items-center py-20 gap-4">
-                <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-accent to-accent-light flex items-center justify-center text-xl animate-spin-slow">✦</div>
-                <p className="text-text-muted">Generating on-brand content…</p>
-              </div>
-            )}
-
-            {samplePost && !loadingSample && (
-              <div className="grid grid-cols-2 gap-6">
-                {/* Preview */}
-                <Card className="overflow-hidden">
-                  <div className="p-4 border-b border-border flex items-center gap-3">
-                    <div
-                      className="w-8 h-8 rounded-full"
-                      style={{
-                        background: `linear-gradient(135deg, ${dna?.colors.primary}, ${dna?.colors.secondary})`,
-                      }}
-                    />
-                    <div>
-                      <p className="text-sm font-semibold">@{igHandle || "yourbrand"}</p>
-                      <p className="text-xs text-text-muted">Instagram · {samplePost.postType}</p>
-                    </div>
-                  </div>
-                  <div
-                    className="aspect-square flex flex-col items-center justify-center p-6 text-center border-b border-border"
-                    style={{
-                      background: `linear-gradient(135deg, ${dna?.colors.primary}22, ${dna?.colors.secondary}22)`,
-                    }}
-                  >
-                    <div className="text-3xl mb-3">🎨</div>
-                    <p className="text-xs font-semibold text-accent-light mb-2">AI Image Generation Prompt:</p>
-                    <p className="text-xs text-text-muted leading-relaxed">{samplePost.imagePrompt}</p>
-                  </div>
-                  <div className="p-4">
-                    <p className="text-sm leading-relaxed whitespace-pre-line mb-3">{samplePost.caption}</p>
-                    <div className="flex flex-wrap gap-1 mb-3">
-                      {samplePost.hashtags?.map((h: string) => (
-                        <span key={h} className="text-xs text-accent-light">{h}</span>
-                      ))}
-                    </div>
-                    {samplePost.cta && (
-                      <div className="p-3 bg-accent/10 rounded-lg text-xs text-accent-light font-medium">
-                        CTA: {samplePost.cta}
-                      </div>
-                    )}
-                    {samplePost.bestTimeToPost && (
-                      <p className="text-xs text-text-muted mt-2">⏰ Best time: {samplePost.bestTimeToPost}</p>
-                    )}
-                  </div>
-                </Card>
-
-                {/* Actions */}
-                <div className="space-y-4">
-                  <Card className="p-5 border-success/20">
-                    <div className="flex items-center gap-2 mb-2">
-                      <span>✅</span>
-                      <span className="font-semibold text-success">Brand DNA Validated</span>
-                    </div>
-                    <p className="text-sm text-text-muted leading-relaxed">
-                      If this feels on-brand, save and start creating. If not, refine your style guide or add more sources.
-                    </p>
-                  </Card>
-
-                  {dna && (
-                    <Card className="p-5">
-                      <SectionLabel>DNA Applied</SectionLabel>
-                      <div className="flex flex-wrap gap-2 mb-2">
-                        {dna.vibe.map((v) => <Chip key={v} variant="accent" className="text-[11px]">{v}</Chip>)}
-                      </div>
-                      <p className="text-xs text-text-muted">Tone: {dna.communication_tone}</p>
-                    </Card>
+          )}
+          {directions && (
+            <div className="grid gap-4 sm:grid-cols-3">
+              {directions.map((d, i) => (
+                <button
+                  key={d.id}
+                  onClick={() => setPicked(d.id)}
+                  aria-pressed={picked === d.id}
+                  className={clsx(
+                    "text-left rounded-2xl border bg-card p-4 transition-colors flex flex-col gap-3",
+                    picked === d.id ? "border-text ring-1 ring-text" : "border-border hover:border-text/30"
                   )}
-
-                  <div className="space-y-2">
-                    <Button className="w-full" onClick={saveBrand}>✦ Save Brand & Start Creating</Button>
-                    <Button variant="ghost" className="w-full" onClick={generateSample}>↺ Regenerate Sample</Button>
-                    <Button variant="ghost" className="w-full" onClick={() => setStep("styleguide")}>← Edit Style Guide</Button>
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <p className="font-medium">{d.name}</p>
+                      <p className="text-xs text-text-muted mt-0.5">{d.words.join(" · ")}</p>
+                    </div>
+                    <span className={clsx("w-5 h-5 rounded-full border grid place-items-center shrink-0", picked === d.id ? "bg-text border-text text-bg" : "border-border")}>
+                      {picked === d.id && <Check size={12} strokeWidth={3} />}
+                    </span>
                   </div>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+                  <PaletteStrip palette={d.palette} />
+                  <BrandPostPreview name={name} headline={d.oneLiner || name} caption={d.sampleCaption} palette={d.palette} fonts={d.fonts} variant={i} />
+                  <p className="text-xs text-text-muted">
+                    {d.fonts.heading} + {d.fonts.body}
+                  </p>
+                  <ul className="space-y-1.5">
+                    {d.sampleLines.map((l, j) => (
+                      <li key={j} className="text-sm leading-snug">
+                        “{l}”
+                      </li>
+                    ))}
+                  </ul>
+                </button>
+              ))}
+            </div>
+          )}
+        </OnboardingShell>
+      )}
+
+      {step === "finishing" && (
+        <OnboardingShell title="Setting up your brand" subtitle="Planning what to post about and checking your colours." onBack={error ? () => setStep("directions") : undefined}>
+          <LiveFindings findings={findings} running={running} />
+          {error && <p className="mt-4 text-sm text-error">{error}</p>}
+        </OnboardingShell>
+      )}
     </AppShell>
   );
 }

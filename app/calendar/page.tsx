@@ -1,5 +1,6 @@
 "use client";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
+import { PlatformIcon, TemplateIcon, TriggerIcon } from "@/components/ui/icons";
 import AppShell from "@/components/layout/AppShell";
 import { useStore } from "@/lib/store";
 import { Button, Card, Chip, SectionLabel, PageHeader, EmptyState } from "@/components/ui";
@@ -11,7 +12,7 @@ import {
   startOfDay, endOfDay, getHours,
 } from "date-fns";
 import type { ScheduledPost, Platform } from "@/lib/types";
-import { PLATFORM_ICONS, PLATFORM_LABELS } from "@/lib/templates";
+import { PLATFORM_LABELS } from "@/lib/templates";
 import clsx from "clsx";
 import { DndProvider, useDrag, useDrop } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
@@ -52,7 +53,9 @@ const DraggablePost: React.FC<DraggablePostProps> = ({ post, onClick, className 
 
   return (
     <button
-      ref={drag}
+      ref={(node) => {
+        drag(node);
+      }}
       onClick={() => onClick(post)}
       className={clsx(
         "w-full text-left px-1.5 py-0.5 rounded text-[10px] font-medium truncate",
@@ -62,7 +65,7 @@ const DraggablePost: React.FC<DraggablePostProps> = ({ post, onClick, className 
       )}
       style={{ cursor: 'grab' }}
     >
-      {PLATFORM_ICONS[post.platforms[0]]} {post.content.caption.slice(0, 20)}…
+      <PlatformIcon platform={post.platforms[0]} size={11} /> {post.content.caption.slice(0, 20)}…
     </button>
   );
 };
@@ -86,7 +89,12 @@ const DroppableDay: React.FC<DroppableDayProps> = ({ day, children, onDropPost, 
   }));
 
   return (
-    <div ref={drop} className={clsx(className)}>
+    <div
+      ref={(node) => {
+        drop(node);
+      }}
+      className={clsx(className)}
+    >
       {children}
     </div>
   );
@@ -99,6 +107,38 @@ export default function CalendarPage() {
   const [viewMode, setViewMode] = useState<ViewMode>("month");
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedPost, setSelectedPost] = useState<ScheduledPost | null>(null);
+  const [publishing, setPublishing] = useState(false);
+  const [publishMessage, setPublishMessage] = useState<string | null>(null);
+  useEffect(() => setPublishMessage(null), [selectedPost?.id]);
+
+  // Sends the post to /api/publish (n8n → Postiz). With `schedule`, Postiz posts it at
+  // post.scheduledAt on its own, so the browser doesn't need to be open.
+  const publishNow = async (post: ScheduledPost, schedule = false) => {
+    setPublishing(true);
+    setPublishMessage(null);
+    try {
+      const res = await fetch("/api/publish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(schedule ? { post, publishAt: post.scheduledAt } : { post }),
+      });
+      const data = await res.json();
+      const results: { platform: string; ok: boolean; error?: string }[] = data.results ?? [];
+      const ok = res.ok && ["published", "scheduled", "partial"].includes(data.status);
+      const status = !ok ? "failed" : data.status === "scheduled" ? "scheduled" : "published";
+      updatePost(post.id, { status });
+      setSelectedPost({ ...post, status });
+      const done = data.status === "scheduled" ? "scheduled in Postiz" : "published";
+      setPublishMessage(
+        results.length
+          ? results.map((r) => `${r.platform}: ${r.ok ? done : r.error}`).join("\n")
+          : data.error ?? `HTTP ${res.status}`
+      );
+    } catch (err) {
+      setPublishMessage(err instanceof Error ? err.message : String(err));
+    }
+    setPublishing(false);
+  };
 
   const brandPosts = brand ? posts.filter((p) => p.brandId === brand.id) : [];
 
@@ -150,7 +190,6 @@ export default function CalendarPage() {
       <AppShell>
         <div className="p-8">
           <EmptyState
-            icon="📅"
             title="No brand selected"
             description="Create a brand to start scheduling content."
             action={<Link href="/onboarding"><Button>Create Brand</Button></Link>}
@@ -176,7 +215,7 @@ export default function CalendarPage() {
                       onClick={() => setViewMode(v)}
                       className={clsx(
                         "px-4 py-2 text-sm font-medium transition-colors capitalize",
-                        viewMode === v ? "bg-accent text-white" : "text-text-muted hover:text-text"
+                        viewMode === v ? "bg-accent text-accent-fg" : "text-text-muted hover:text-text"
                       )}
                     >
                       {v}
@@ -238,7 +277,7 @@ export default function CalendarPage() {
                           className={clsx(
                             "text-xs font-semibold w-6 h-6 flex items-center justify-center rounded-full mb-1",
                             isToday(day)
-                              ? "bg-accent text-white"
+                              ? "bg-accent text-accent-fg"
                               : inMonth
                               ? "text-text"
                               : "text-text-muted"
@@ -284,7 +323,7 @@ export default function CalendarPage() {
                           <span
                             className={clsx(
                               "text-sm font-bold w-7 h-7 flex items-center justify-center rounded-full mx-auto",
-                              isToday(day) ? "bg-accent text-white" : "text-text"
+                              isToday(day) ? "bg-accent text-accent-fg" : "text-text"
                             )}
                           >
                             {format(day, "d")}
@@ -356,14 +395,45 @@ export default function CalendarPage() {
                   <div className="flex gap-1 mb-3 flex-wrap">
                     {selectedPost.platforms.map((p) => (
                       <Chip key={p} variant="neutral" className="text-[10px]">
-                        {PLATFORM_ICONS[p]} {PLATFORM_LABELS[p as Platform]}
+                        <PlatformIcon platform={p} /> {PLATFORM_LABELS[p as Platform]}
                       </Chip>
                     ))}
                   </div>
+                  {selectedPost.mediaUrl && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={selectedPost.mediaUrl}
+                      alt="Post image"
+                      className="w-full rounded-lg mb-3 border border-border"
+                    />
+                  )}
                   <p className="text-xs leading-relaxed text-text mb-4 line-clamp-4">
                     {selectedPost.content.caption}
                   </p>
-                  <div className="flex gap-2">
+                  {publishMessage && (
+                    <p className="text-[11px] whitespace-pre-line text-text-muted mb-3">{publishMessage}</p>
+                  )}
+                  <div className="flex gap-2 flex-wrap">
+                    {selectedPost.status !== "published" && (
+                      <Button
+                        size="sm"
+                        loading={publishing}
+                        onClick={() => publishNow(selectedPost)}
+                      >
+                        Publish now
+                      </Button>
+                    )}
+                    {selectedPost.status !== "published" &&
+                      parseISO(selectedPost.scheduledAt).getTime() > Date.now() + 60_000 && (
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          loading={publishing}
+                          onClick={() => publishNow(selectedPost, true)}
+                        >
+                          Schedule in Postiz
+                        </Button>
+                      )}
                     {selectedPost.status === "scheduled" && (
                       <Button
                         variant="success"

@@ -1,4 +1,8 @@
 /** @type {import('tailwindcss').Config} */
+// Colours are CSS variables (see app/globals.css) so the app has light and dark themes.
+// The chrome is deliberately neutral: the user's own brand colours are the only strong colour on screen.
+const v = (name) => `rgb(var(--${name}) / <alpha-value>)`;
+
 module.exports = {
   content: [
     "./pages/**/*.{js,ts,jsx,tsx,mdx}",
@@ -9,43 +13,49 @@ module.exports = {
   theme: {
     extend: {
       fontFamily: {
-        sans: ["var(--font-dm-sans)", "system-ui", "sans-serif"],
-        display: ["var(--font-playfair)", "Georgia", "serif"],
+        sans: ["var(--font-sans)", "system-ui", "sans-serif"],
+        // Kept as an alias so older pages keep working; it is the same UI sans.
+        display: ["var(--font-sans)", "system-ui", "sans-serif"],
+        mono: ["var(--font-mono)", "ui-monospace", "monospace"],
       },
       colors: {
-        bg: "#0A0A0F",
-        surface: "#12121A",
-        card: "#1A1A28",
-        border: "#2A2A40",
+        bg: v("bg"),
+        surface: v("surface"),
+        card: v("card"),
+        border: v("border"),
         accent: {
-          DEFAULT: "#7C6EF8",
-          light: "#A89DF9",
-          glow: "rgba(124,110,248,0.12)",
+          DEFAULT: v("accent"),
+          light: v("accent-light"),
+          fg: v("accent-fg"),
+          glow: "rgb(var(--accent) / 0.06)",
         },
-        success: "#34D399",
-        warn: "#FBBF24",
-        error: "#F87171",
+        success: v("success"),
+        warn: v("warn"),
+        error: v("error"),
         text: {
-          DEFAULT: "#E8E8F0",
-          muted: "#6B6B8A",
+          DEFAULT: v("text"),
+          muted: v("text-muted"),
         },
       },
       borderRadius: {
-        xl: "14px",
-        "2xl": "18px",
+        xl: "10px",
+        "2xl": "14px",
       },
       boxShadow: {
-        accent: "0 8px 24px rgba(124,110,248,0.25)",
-        glow: "0 4px 20px var(--glow-color, rgba(124,110,248,0.3))",
+        // No glows: a single quiet elevation.
+        accent: "0 1px 2px rgb(0 0 0 / 0.06)",
+        glow: "0 1px 2px rgb(0 0 0 / 0.06)",
+        card: "0 1px 2px rgb(0 0 0 / 0.04), 0 1px 1px rgb(0 0 0 / 0.02)",
+        pop: "0 8px 24px rgb(0 0 0 / 0.10)",
       },
       animation: {
         "spin-slow": "spin 3s linear infinite",
-        "fade-up": "fadeUp 0.45s ease forwards",
+        "fade-up": "fadeUp 0.18s ease-out forwards",
         pulse: "pulse 1.4s ease-in-out infinite",
       },
       keyframes: {
         fadeUp: {
-          from: { opacity: "0", transform: "translateY(10px)" },
+          from: { opacity: "0", transform: "translateY(4px)" },
           to: { opacity: "1", transform: "translateY(0)" },
         },
       },
