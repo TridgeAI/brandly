@@ -16,6 +16,8 @@ export interface IngestOutput {
   website?: WebsiteEvidence;
   visual?: VisualInsights;
   igHandle?: string;
+  /** Content photos found on the website, stored as brand photos after the run. */
+  photoUrls?: string[];
 }
 
 const VISION_PROMPT = `These images come from one brand (catalogue pages, social posts or screenshots).
@@ -51,6 +53,8 @@ export const ingestStage: StageDefinition<IngestInput> = {
           try {
             const site = await fetchWebsiteEvidence(input.websiteUrl!);
             output.website = site;
+            output.photoUrls = site.images;
+            if (site.images.length) report({ id: "photos", label: `Found ${site.images.length} photos to use in posts`, status: "done", image: site.images[0] });
             report({ id: "site", label: `Read ${new URL(site.url).hostname}`, detail: site.title || undefined, status: "done" });
             if (site.logoUrl) report({ id: "logo", label: "Found your logo", status: "done", image: site.logoUrl });
             else report({ id: "logo", label: "No logo found on the site", detail: "You can upload one later", status: "warn" });

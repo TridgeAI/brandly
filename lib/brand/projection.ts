@@ -2,6 +2,7 @@ import type { BrandDNA } from "../types";
 import { emptyModel, type BrandModel } from "./model";
 import { describeAudience, MOMENT_LABELS, MOTIVATION_LABELS } from "./audience";
 import { mergePatch } from "./merge";
+import { BUSINESS_MODELS, INDUSTRIES, PRIMARY_GOALS } from "./taxonomy";
 
 /** Projects the Brand Model onto the legacy flat BrandDNA so existing pages and routes keep working. */
 export function toBrandDNA(m: BrandModel): BrandDNA {
@@ -81,6 +82,14 @@ export function toPromptContext(m: BrandModel): string {
     `BRAND: ${m.name}`,
     m.identity.oneLiner && `ONE-LINER: ${m.identity.oneLiner}`,
     m.strategy.offering && `SELLS: ${m.strategy.offering}${m.strategy.category ? ` (category: ${m.strategy.category})` : ""}`,
+    (m.strategy.industry || m.strategy.businessModel || m.strategy.primaryGoal) &&
+      `BUSINESS: ${[
+        m.strategy.industry && INDUSTRIES.find((i) => i.key === m.strategy.industry)?.label,
+        m.strategy.businessModel && BUSINESS_MODELS.find((i) => i.key === m.strategy.businessModel)?.label,
+        m.strategy.primaryGoal && `goal: ${PRIMARY_GOALS.find((i) => i.key === m.strategy.primaryGoal)?.label}`,
+      ]
+        .filter(Boolean)
+        .join("; ")}`,
     m.strategy.promise && `PROMISE: ${m.strategy.promise}`,
     m.strategy.differentiators.length && `DIFFERENT BECAUSE: ${m.strategy.differentiators.join("; ")}`,
     `AUDIENCE: ${describeAudience(a) || "not specified"}${a.psychographic ? `. ${a.psychographic}` : ""}`,

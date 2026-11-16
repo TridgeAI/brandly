@@ -1,81 +1,33 @@
 import { NextRequest, NextResponse } from "next/server";
+import type { GeneratePostPayload } from "@/lib/types";
+import { generatePost } from "@/lib/content/generate";
+import { AuthError, errorResponse, requireSession } from "@/lib/db/session";
 
 export const maxDuration = 60;
-import { generateText, parseJSON } from "@/lib/llm";
-import type { GeneratePostPayload, GeneratedPost } from "@/lib/types";
-import { CONTENT_TEMPLATES, PLATFORM_LIMITS } from "@/lib/templates";
-import { callN8n, n8nEnabled } from "@/lib/n8n";
-import { toPromptContext } from "@/lib/brand/projection";
-import { llmScope } from "@/lib/db/llm-scope";
-import { lastLlmCallId } from "@/lib/llm-log";
 
-// Bump when the prompt changes, so quality can be compared across prompt versions.
-const PROMPT_VERSION = "generate-post@1";
-
-const SYSTEM = `You are an expert social media content strategist.
-You write deeply on-brand content that feels human, not AI-generated.
-Return ONLY a JSON object — no markdown, no preamble.`;
-
+// Picks a brief (format, hook, pillar) from the brand's recent posts, writes the post
+// with the full brand context, and chooses a layout. Runs through n8n when it is configured.
 export async function POST(req: NextRequest) {
   try {
+    await requireSession();
     const body: GeneratePostPayload = await req.json();
-    if (n8nEnabled()) return callN8n("generate-post", body);
-    const { brandDNA, brandModel, template, topic, platforms, tone, additionalContext } = body;
-    // The brand context is a stable prefix, so it is sent as cached context.
-    const brandContext = brandModel ? toPromptContext(brandModel) : `Brand DNA:
-${JSON.stringify(brandDNA, null, 2)}`;
-
-    const templateConfig = CONTENT_TEMPLATES.find((t) => t.id === template);
-    const platformLimitsList = platforms
-      .map((p) => `${p}: ${PLATFORM_LIMITS[p].caption} chars`)
-      .join(", ");
-
-    const userPrompt = `Content request:
-- Template: ${templateConfig?.label} — ${templateConfig?.promptHint}
-- Topic/focus: ${topic || "general brand content"}
-- Platforms: ${platforms.join(", ")}
-- Character limits: ${platformLimitsList}
-- Tone override: ${tone || "match brand tone"}
-- Additional context: ${additionalContext || "none"}
-
-Generate a full post package and return this JSON shape:
-{
-  "caption": string (primary caption, optimised for Instagram, within 2200 chars),
-  "hashtags": string[] (8-15 hashtags, mix of broad and niche, no # prefix needed — add it in the array),
-  "imagePrompt": string (detailed Midjourney/DALL-E style prompt that matches brand visual style, 2-3 sentences),
-  "cta": string (clear call to action, 1 sentence),
-  "bestTimeToPost": string (e.g. "Tuesday–Thursday, 7–9am or 6–8pm"),
-  "postType": string (e.g. "Carousel", "Single image", "Reel", "Story"),
-  "platformVariants": {
-    "instagram": string (caption adapted for Instagram),
-    "facebook": string (longer, more conversational, no hashtags needed),
-    "linkedin": string (professional tone, insight-driven, 3 hashtags max),
-    "twitter": string (punchy, under 280 chars including hashtags)
-  }
-}
-
-Rules:
-- platformVariants must only include the requested platforms: ${platforms.join(", ")}
-- Write captions that sound like a real human, not AI
-- Embed the brand's communication tone and vibe naturally
-- hashtags array should include the # symbol`;
-
-    const { raw, generationId } = await llmScope("generate-post", { brandId: brandModel?.id, promptVersion: PROMPT_VERSION }, async () => {
-      const text = await generateText(SYSTEM, userPrompt, { task: "fast", maxTokens: 2000, cachedContext: brandContext });
-      return { raw: text, generationId: lastLlmCallId() };
+    if (!body.platforms?.length) return NextResponse.json({ error: "Choose at least one platform" }, { status: 400 });
+    const result = await generatePost({
+      feature: "generate-post",
+      model: body.brandModel,
+      dna: body.brandDNA,
+      platforms: body.platforms,
+      template: body.template,
+      topic: body.topic,
+      tone: body.tone,
+      additionalContext: body.additionalContext,
+      n8nBody: body as unknown as Record<string, unknown>,
     });
-    const post = parseJSON<GeneratedPost>(raw);
-
-    if (!post) {
-      return NextResponse.json(
-        { error: "Failed to parse generated post" },
-        { status: 500 }
-      );
-    }
-
-    return NextResponse.json({ post, generationId });
+    if ("error" in result) return NextResponse.json({ error: result.error }, { status: result.status });
+    return NextResponse.json(result);
   } catch (err) {
+    if (err instanceof AuthError) return errorResponse(err, "generate-post");
     console.error("[generate-post]", err);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    return NextResponse.json({ error: err instanceof Error ? err.message : "Internal server error" }, { status: 500 });
   }
 }

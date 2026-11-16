@@ -209,3 +209,50 @@ export function personalityToPalette(p: Personality, seed = 1): Palette {
 
   return { primary, secondary, accent, neutral };
 }
+
+// ── Colour words ───────────────────────────────────────────────────────────
+// Image models ignore hex codes, so prompts describe colours in plain words.
+const HUE_NAMES: [number, string][] = [
+  [15, "red"],
+  [40, "orange"],
+  [55, "amber"],
+  [70, "yellow"],
+  [90, "olive"],
+  [150, "green"],
+  [175, "teal"],
+  [200, "cyan"],
+  [235, "blue"],
+  [260, "indigo"],
+  [290, "purple"],
+  [330, "magenta"],
+  [350, "pink"],
+  [361, "red"],
+];
+
+/** "#1E3A8A" → "deep navy blue"; "#F5F5F4" → "off-white". */
+export function colorToWords(hex: string): string {
+  const n = normalizeHex(hex);
+  if (!n) return "";
+  const { h, s, l } = hexToHsl(n);
+  if (s < 0.12) {
+    if (l > 0.93) return "off-white";
+    if (l > 0.75) return "light grey";
+    if (l > 0.45) return "mid grey";
+    if (l > 0.15) return "charcoal";
+    return "near-black";
+  }
+  let hue = HUE_NAMES.find(([max]) => h < max)?.[1] ?? "red";
+  // Common named shades read better than "dark orange" or "pale red".
+  if (hue === "orange" && l < 0.35) hue = "brown";
+  if (hue === "blue" && l < 0.3) hue = "navy blue";
+  if ((hue === "red" || hue === "pink") && l > 0.8) hue = "blush pink";
+  if ((hue === "orange" || hue === "amber" || hue === "yellow") && s < 0.35 && l > 0.7) hue = "beige";
+  const tone = l > 0.82 ? "pale" : l > 0.65 ? "light" : l < 0.22 ? "deep" : l < 0.38 ? "dark" : "";
+  const sat = s < 0.3 ? "muted" : s > 0.75 && l > 0.35 && l < 0.65 ? "vivid" : "";
+  return [sat, tone, hue].filter(Boolean).join(" ");
+}
+
+/** De-duplicated colour words for a palette. */
+export function paletteToWords(hexes: string[]): string[] {
+  return [...new Set(hexes.map(colorToWords).filter(Boolean))];
+}

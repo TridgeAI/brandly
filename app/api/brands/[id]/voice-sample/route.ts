@@ -4,12 +4,18 @@ export const maxDuration = 60;
 import { generateText } from "@/lib/llm";
 import { toPromptContext } from "@/lib/brand/projection";
 import { llmScope } from "@/lib/db/llm-scope";
+import { errorResponse, requireSession } from "@/lib/db/session";
 import type { BrandModel } from "@/lib/brand/model";
 
 // Rewrites one sample sentence in the brand's current voice (used by the voice sliders).
 // Fast model + cached brand context: costs a fraction of a paisa per call.
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  try {
+    await requireSession();
+  } catch (err) {
+    return errorResponse(err, "voice-sample auth");
+  }
   const { model } = (await req.json().catch(() => ({}))) as { model?: BrandModel };
   if (!model) return NextResponse.json({ error: "model is required" }, { status: 400 });
   try {

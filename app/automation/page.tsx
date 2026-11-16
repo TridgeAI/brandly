@@ -109,6 +109,7 @@ export default function AutomationPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           brandDNA: brand.dna,
+          brandModel: brand.model,
           triggerType: rule.trigger.type,
           triggerConfig: rule.trigger,
           triggerContext: context,

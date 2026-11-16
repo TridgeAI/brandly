@@ -5,6 +5,7 @@ import { analyseImages, parseJSON } from "@/lib/llm";
 import type { AnalysePdfPayload } from "@/lib/types";
 import { callN8n, n8nEnabled } from "@/lib/n8n";
 import { llmScope } from "@/lib/db/llm-scope";
+import { AuthError, errorResponse, requireSession } from "@/lib/db/session";
 
 const PDF_VISION_PROMPT = `These are rasterised pages from a brand PDF catalogue.
 Each page is rendered at full resolution — ALL visual content is visible:
@@ -28,6 +29,7 @@ Return ONLY a JSON object (no markdown, no preamble):
 
 export async function POST(req: NextRequest) {
   try {
+    await requireSession();
     const body: AnalysePdfPayload = await req.json();
     if (n8nEnabled()) return callN8n("analyse-pdf", body);
     const { pages, brandName } = body;
@@ -52,6 +54,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ insights });
   } catch (err) {
+    if (err instanceof AuthError) return errorResponse(err, "analyse-pdf");
     console.error("[analyse-pdf]", err);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }

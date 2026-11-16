@@ -2,13 +2,21 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 // Pages anyone can open. Everything else needs a session.
-const PUBLIC_PATHS = ["/login", "/signup", "/forgot-password", "/auth/"];
+const PUBLIC_PATHS = ["/login", "/signup", "/forgot-password", "/auth/", "/api/cron/"]; // cron routes check CRON_SECRET themselves
 
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({ request });
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
-  if (!url || !key) return response; // Supabase not configured yet: run without auth.
+  if (!url || !key) {
+    // Fail closed: without Supabase there is no way to check a session. Only allow
+    // local development to run unauthenticated.
+    if (process.env.NODE_ENV === "development") return response;
+    if (request.nextUrl.pathname.startsWith("/api/")) {
+      return NextResponse.json({ error: "Authentication is not configured." }, { status: 503 });
+    }
+    return new NextResponse("Authentication is not configured.", { status: 503 });
+  }
 
   const supabase = createServerClient(url, key, {
     cookies: {

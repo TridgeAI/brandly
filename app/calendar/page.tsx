@@ -111,25 +111,27 @@ export default function CalendarPage() {
   const [publishMessage, setPublishMessage] = useState<string | null>(null);
   useEffect(() => setPublishMessage(null), [selectedPost?.id]);
 
-  // Sends the post to the n8n backend, which publishes it through Ayrshare.
-  const publishNow = async (post: ScheduledPost) => {
+  // Sends the post to /api/publish (n8n → Postiz). With `schedule`, Postiz posts it at
+  // post.scheduledAt on its own, so the browser doesn't need to be open.
+  const publishNow = async (post: ScheduledPost, schedule = false) => {
     setPublishing(true);
     setPublishMessage(null);
     try {
       const res = await fetch("/api/publish", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ post }),
+        body: JSON.stringify(schedule ? { post, publishAt: post.scheduledAt } : { post }),
       });
       const data = await res.json();
       const results: { platform: string; ok: boolean; error?: string }[] = data.results ?? [];
-      const ok = res.ok && (data.status === "published" || data.status === "partial");
-      const status = ok ? "published" : "failed";
+      const ok = res.ok && ["published", "scheduled", "partial"].includes(data.status);
+      const status = !ok ? "failed" : data.status === "scheduled" ? "scheduled" : "published";
       updatePost(post.id, { status });
       setSelectedPost({ ...post, status });
+      const done = data.status === "scheduled" ? "scheduled in Postiz" : "published";
       setPublishMessage(
         results.length
-          ? results.map((r) => `${r.platform}: ${r.ok ? "published" : r.error}`).join("\n")
+          ? results.map((r) => `${r.platform}: ${r.ok ? done : r.error}`).join("\n")
           : data.error ?? `HTTP ${res.status}`
       );
     } catch (err) {
@@ -421,6 +423,17 @@ export default function CalendarPage() {
                         Publish now
                       </Button>
                     )}
+                    {selectedPost.status !== "published" &&
+                      parseISO(selectedPost.scheduledAt).getTime() > Date.now() + 60_000 && (
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          loading={publishing}
+                          onClick={() => publishNow(selectedPost, true)}
+                        >
+                          Schedule in Postiz
+                        </Button>
+                      )}
                     {selectedPost.status === "scheduled" && (
                       <Button
                         variant="success"

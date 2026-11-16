@@ -91,6 +91,45 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(({ label, hint, pr
 });
 Input.displayName = "Input";
 
+// ── Select ─────────────────────────────────────────────────────────────────
+interface SelectProps extends Omit<React.SelectHTMLAttributes<HTMLSelectElement>, "onChange"> {
+  label?: string;
+  hint?: string;
+  options: readonly { key: string; label: string }[];
+  placeholder?: string;
+  onChange?: (value: string) => void;
+}
+
+export function Select({ label, hint, options, placeholder = "Choose…", onChange, className, id, ...props }: SelectProps) {
+  const selectId = id ?? (label ? `sel_${label.replace(/\W+/g, "_").toLowerCase()}` : undefined);
+  return (
+    <div className="w-full">
+      {label && (
+        <FieldLabel htmlFor={selectId} hint={hint}>
+          {label}
+        </FieldLabel>
+      )}
+      <select
+        id={selectId}
+        onChange={(e) => onChange?.(e.target.value)}
+        className={clsx(
+          "w-full h-11 bg-surface border border-border rounded-xl px-3 text-sm text-text",
+          "focus:outline-none focus:border-text/40 focus:ring-4 focus:ring-text/5 transition-colors",
+          className
+        )}
+        {...props}
+      >
+        <option value="">{placeholder}</option>
+        {options.map((o) => (
+          <option key={o.key} value={o.key}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
 // ── Textarea ───────────────────────────────────────────────────────────────
 interface TextareaProps extends React.TextareaHTMLAttributes<HTMLTextAreaElement> {
   label?: string;

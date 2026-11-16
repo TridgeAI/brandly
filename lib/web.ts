@@ -1,54 +1,19 @@
-import { lookup } from "node:dns/promises";
-import { isIP } from "node:net";
 import { dedupeColors, hexToHsl } from "./brand/color";
+import { assertPublicUrl, safeFetch } from "./net/safe-fetch";
 
 const UA = "Mozilla/5.0 (compatible; BrandlyBot/1.0; +https://brandly.app/bot)";
 const MAX_HTML_BYTES = 1_500_000;
 const MAX_CSS_BYTES = 400_000;
 
-// ── SSRF guard ─────────────────────────────────────────────────────────────
-function isPrivateIp(ip: string): boolean {
-  if (ip.includes(":")) {
-    const v6 = ip.toLowerCase();
-    if (v6.startsWith("::ffff:")) return isPrivateIp(v6.slice(7));
-    return v6 === "::1" || v6 === "::" || v6.startsWith("fc") || v6.startsWith("fd") || v6.startsWith("fe80");
-  }
-  const [a, b] = ip.split(".").map(Number);
-  return (
-    a === 10 ||
-    a === 127 ||
-    a === 0 ||
-    (a === 169 && b === 254) ||
-    (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168) ||
-    (a === 100 && b >= 64 && b <= 127) ||
-    a >= 224
-  );
-}
-
-/** Normalises a user-typed URL and rejects anything that isn't a public http(s) address. */
-export async function assertPublicUrl(raw: string): Promise<URL> {
-  const withScheme = /^https?:\/\//i.test(raw.trim()) ? raw.trim() : `https://${raw.trim()}`;
-  const url = new URL(withScheme);
-  if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("Only http and https links are supported.");
-  if (url.username || url.password) throw new Error("Links with passwords are not supported.");
-  const host = url.hostname.replace(/^\[|\]$/g, "");
-  if (host === "localhost" || host.endsWith(".local") || host.endsWith(".internal")) throw new Error("That address isn't public.");
-  const ips = isIP(host) ? [host] : (await lookup(host, { all: true })).map((r) => r.address);
-  if (!ips.length || ips.some(isPrivateIp)) throw new Error("That address isn't public.");
-  return url;
-}
+// SSRF guard lives in lib/net/safe-fetch.ts; re-exported for existing importers.
+export { assertPublicUrl };
 
 async function fetchCapped(url: string, maxBytes: number, timeoutMs = 15_000): Promise<{ text: string; finalUrl: string } | null> {
-  const safe = await assertPublicUrl(url);
-  const res = await fetch(safe, {
+  const res = await safeFetch(url, {
     headers: { "User-Agent": UA, Accept: "text/html,text/css,*/*;q=0.8" },
-    redirect: "follow",
     signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok || !res.body) return null;
-  // Re-check where redirects landed.
-  await assertPublicUrl(res.url);
   const reader = res.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
@@ -59,7 +24,7 @@ async function fetchCapped(url: string, maxBytes: number, timeoutMs = 15_000): P
     size += value.byteLength;
   }
   reader.cancel().catch(() => {});
-  return { text: new TextDecoder().decode(Buffer.concat(chunks.map((c) => Buffer.from(c)))), finalUrl: res.url };
+  return { text: new TextDecoder().decode(Buffer.concat(chunks.map((c) => Buffer.from(c)))), finalUrl: res.url || url };
 }
 
 const stripTags = (html: string) =>
@@ -92,6 +57,8 @@ export interface WebsiteEvidence {
   themeColor?: string;
   logoUrl?: string;
   ogImage?: string;
+  /** Large content images (hero / product shots), best first. */
+  images: string[];
   colors: string[]; // by frequency, grays removed
   fonts: string[];
   headings: string[];
@@ -153,6 +120,34 @@ function extractFonts(html: string, css: string): string[] {
   return [...fonts.entries()].sort((a, b) => b[1] - a[1]).map(([f]) => f).slice(0, 4);
 }
 
+const SKIP_IMG = /logo|icon|favicon|sprite|avatar|badge|payment|flag|emoji|spinner|loader|placeholder|pixel|tracking|\.svg(\?|$)|\.gif(\?|$)|data:/i;
+const GOOD_IMG = /product|hero|banner|feature|collection|shop|item|gallery|cover|main|slide|lifestyle|cdn\.shopify\.com\/s\/files/i;
+
+/** Picks <img> tags that look like real content photos (not icons or logos). */
+function contentImages(html: string, abs: (href?: string) => string | undefined, logoUrl?: string): string[] {
+  const scored: { url: string; score: number }[] = [];
+  for (const tag of html.match(/<img[^>]*>/gi) ?? []) {
+    // Lazy-loaded images keep the real URL in data-src / srcset.
+    const srcset = attr(tag, "srcset") ?? attr(tag, "data-srcset");
+    const fromSet = srcset
+      ?.split(",")
+      .map((s) => s.trim().split(/\s+/))
+      .sort((a, b) => parseInt(b[1] ?? "0") - parseInt(a[1] ?? "0"))[0]?.[0];
+    const src = attr(tag, "data-src") ?? fromSet ?? attr(tag, "src");
+    const url = abs(src?.replace(/^\/\//, "https://"));
+    if (!url || url === logoUrl || SKIP_IMG.test(url) || SKIP_IMG.test(attr(tag, "class") ?? "") || SKIP_IMG.test(attr(tag, "alt") ?? "")) continue;
+    const w = Number(attr(tag, "width") ?? 0);
+    const h = Number(attr(tag, "height") ?? 0);
+    if ((w && w < 300) || (h && h < 300)) continue;
+    let score = 1;
+    if (GOOD_IMG.test(url) || GOOD_IMG.test(attr(tag, "class") ?? "") || GOOD_IMG.test(attr(tag, "alt") ?? "")) score += 2;
+    if (w >= 600 || h >= 600) score += 2;
+    if (srcset) score += 1;
+    scored.push({ url, score });
+  }
+  return [...new Map(scored.map((x) => [x.url, x])).values()].sort((a, b) => b.score - a.score).map((x) => x.url).slice(0, 20);
+}
+
 export async function fetchWebsiteEvidence(rawUrl: string): Promise<WebsiteEvidence> {
   const page = await fetchCapped(rawUrl, MAX_HTML_BYTES, 20_000);
   if (!page) throw new Error("The website didn't respond. Check the link and try again.");
@@ -207,6 +202,8 @@ export async function fetchWebsiteEvidence(rawUrl: string): Promise<WebsiteEvide
   const logoImg = (html.match(/<img\b[^>]*>/gi) ?? []).find((t) => /logo/i.test(t));
   const logoUrl = abs(logoImg ? attr(logoImg, "src") : undefined) ?? abs(appleIcon ? attr(appleIcon, "href") : undefined) ?? abs(icons[0] ? attr(icons[0], "href") : undefined);
 
+  const images = contentImages(html, abs, logoUrl);
+
   const headings = [...html.matchAll(/<h[1-3][^>]*>([\s\S]*?)<\/h[1-3]>/gi)]
     .map((m) => stripTags(m[1]))
     .filter((h) => h.length > 2 && h.length < 160)
@@ -219,6 +216,7 @@ export async function fetchWebsiteEvidence(rawUrl: string): Promise<WebsiteEvide
     themeColor,
     logoUrl,
     ogImage: abs(metaContent(html, "og:image")),
+    images: [...new Set([abs(metaContent(html, "og:image")), ...images].filter((u): u is string => !!u))].slice(0, 16),
     colors,
     fonts: extractFonts(html, css),
     headings,

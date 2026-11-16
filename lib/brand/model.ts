@@ -9,6 +9,8 @@
 //   voice       → NN/g four dimensions of tone
 //   content     → pillars + Ehrenberg-Bass category entry points / distinctive assets
 
+import type { BusinessModel, Industry, PrimaryGoal } from "./taxonomy";
+
 export type BrandMode = "analyse" | "build" | "refine";
 
 export type Gender = "women" | "men" | "all";
@@ -61,6 +63,10 @@ export interface Audience {
 
 export interface Strategy {
   category: string;
+  /** Controlled lists (lib/brand/taxonomy.ts); unset on brands made before classification existed. */
+  industry?: Industry;
+  businessModel?: BusinessModel;
+  primaryGoal?: PrimaryGoal;
   offering: string; // what they sell, in plain words
   audience: Audience;
   problem: string;
@@ -113,6 +119,46 @@ export interface FontToken {
   $value: string;
 }
 
+// ── Branded post layouts ────────────────────────────────────────────────────
+export const LAYOUT_IDS = [
+  "photo-band",
+  "full-bleed",
+  "big-number",
+  "quote",
+  "split",
+  "framed",
+  "checklist",
+  "myth-fact",
+  "carousel-cover",
+  "carousel-slide",
+] as const;
+export type LayoutId = (typeof LAYOUT_IDS)[number];
+
+export type ColorRole = "primary" | "secondary" | "accent" | "neutral";
+
+/** How this brand's posts are laid out. Chosen once per brand, editable on the brand page. */
+export interface LayoutKit {
+  /** The 5–7 layouts this brand uses (carousel-slide is always allowed for carousels). */
+  layouts: LayoutId[];
+  /** Corner radius in px at 1080 wide. */
+  radius: number;
+  photoTreatment: "full" | "framed" | "duotone";
+  headlineCase: "upper" | "title" | "sentence";
+  accentShape: "none" | "bar" | "circle" | "underline" | "corner";
+  logoPosition: "top-left" | "top-right" | "bottom-left" | "bottom-right";
+  /** Which brand colour fills the background of text-led layouts. */
+  background: ColorRole;
+}
+
+/** A real brand photo stored in the `images` bucket. */
+export interface BrandPhoto {
+  /** Storage path inside the `images` bucket. */
+  path: string;
+  sourceUrl?: string;
+  source: "website" | "instagram" | "upload";
+  addedAt: string;
+}
+
 export interface Expression {
   tokens: {
     color: {
@@ -131,7 +177,11 @@ export interface Expression {
   imageryStyle: string;
   logoUrl?: string;
   logoNotes?: string;
+  /** Storage path of the logo in the `logos` bucket, when a copy was saved. */
+  logoPath?: string;
   distinctiveAssets: string[];
+  layoutKit?: LayoutKit;
+  photos?: BrandPhoto[];
 }
 
 /** NN/g tone dimensions, each -1..1. */

@@ -5,10 +5,13 @@ import { useSearchParams } from "next/navigation";
 import clsx from "clsx";
 import { AlertTriangle, ArrowRight, Plus, RefreshCw, X } from "lucide-react";
 import AppShell from "@/components/layout/AppShell";
-import { Button, Card, EmptyState, Input, Textarea } from "@/components/ui";
+import { Button, Card, EmptyState, Input, Select, Textarea } from "@/components/ui";
+import { BUSINESS_MODELS, INDUSTRIES, PRIMARY_GOALS, type BusinessModel, type Industry, type PrimaryGoal } from "@/lib/brand/taxonomy";
 import { ChipGroup, LockButton, SourceTag, TierCards } from "@/components/onboarding/kit";
 import { BrandPostPreview } from "@/components/brand/BrandPreview";
 import { DeleteBrandDialog } from "@/components/brand/DeleteBrandDialog";
+import { LayoutKitEditor } from "@/components/brand/LayoutKitEditor";
+import { BrandPhotos } from "@/components/brand/BrandPhotos";
 import { useStore } from "@/lib/store";
 import { fromBrandDNA } from "@/lib/brand/projection";
 import { isLocked, mergePatch, sectionConfidence, setLock } from "@/lib/brand/merge";
@@ -236,6 +239,26 @@ function BrandProfile() {
               <Input label="One-liner" defaultValue={model.identity.oneLiner} onBlur={(e) => e.target.value !== model.identity.oneLiner && edit({ identity: { oneLiner: e.target.value } })} />
               <Textarea label="What you sell" rows={2} defaultValue={model.strategy.offering} onBlur={(e) => e.target.value !== model.strategy.offering && edit({ strategy: { offering: e.target.value } })} />
               <Textarea label="Your promise" rows={2} defaultValue={model.strategy.promise} onBlur={(e) => e.target.value !== model.strategy.promise && edit({ strategy: { promise: e.target.value } })} />
+              <div className="grid gap-4 sm:grid-cols-3">
+                <Select
+                  label="Industry"
+                  options={INDUSTRIES}
+                  value={model.strategy.industry ?? ""}
+                  onChange={(v) => v && edit({ strategy: { industry: v as Industry } })}
+                />
+                <Select
+                  label="How you sell"
+                  options={BUSINESS_MODELS}
+                  value={model.strategy.businessModel ?? ""}
+                  onChange={(v) => v && edit({ strategy: { businessModel: v as BusinessModel } })}
+                />
+                <Select
+                  label="Main goal"
+                  options={PRIMARY_GOALS}
+                  value={model.strategy.primaryGoal ?? ""}
+                  onChange={(v) => v && edit({ strategy: { primaryGoal: v as PrimaryGoal } })}
+                />
+              </div>
             </div>
           </Section>
 
@@ -305,6 +328,14 @@ function BrandProfile() {
                 </div>
               ))}
             </div>
+          </Section>
+
+          <Section id="expression.layoutKit" title="Post layouts" description="How your posts look: Brandly lays out every image with your fonts, colours and logo" model={model} onLock={lock}>
+            <LayoutKitEditor model={model} onChange={(kit) => edit({ expression: { layoutKit: kit } })} />
+          </Section>
+
+          <Section id="expression.photos" title="Brand photos" description="Real photos used in product, offer and testimonial posts" model={model} onLock={lock}>
+            <BrandPhotos model={model} onChange={(photos) => save({ ...model, expression: { ...model.expression, photos } })} />
           </Section>
 
           <Section id="voice" title="Voice" description="Move the sliders and watch the sample line change" model={model} onLock={lock}>

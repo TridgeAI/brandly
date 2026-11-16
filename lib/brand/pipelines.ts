@@ -5,6 +5,7 @@ import { extractStage } from "./stages/extract";
 import { contentSystemStage } from "./stages/content-system";
 import { validateStage } from "./stages/validate";
 import { directionsStage } from "./stages/directions";
+import { layoutKitStage } from "./stages/layout-kit";
 import type { Finding, StageDefinition } from "./stages/types";
 import type { Compliance } from "./model";
 import { withFeature } from "../llm-log";
@@ -16,14 +17,15 @@ export const STAGES: Record<string, StageDefinition<any>> = {
   [contentSystemStage.id]: contentSystemStage,
   [validateStage.id]: validateStage,
   [directionsStage.id]: directionsStage,
+  [layoutKitStage.id]: layoutKitStage,
 };
 
 /** A path through the loop is just an ordered list of stages. */
 export const PIPELINES = {
-  analyse: ["ingest", "extract", "content-system", "validate"],
+  analyse: ["ingest", "extract", "content-system", "layout-kit", "validate"],
   // Build and Refine reuse the same engine; their interview/direction stages plug in here.
-  build: ["content-system", "validate"],
-  refine: ["ingest", "extract", "content-system", "validate"],
+  build: ["content-system", "layout-kit", "validate"],
+  refine: ["ingest", "extract", "content-system", "layout-kit", "validate"],
 } as const;
 export type PipelineId = keyof typeof PIPELINES;
 
