@@ -1,12 +1,14 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { PlatformIcon, TemplateIcon, TriggerIcon } from "@/components/ui/icons";
 import AppShell from "@/components/layout/AppShell";
 import { useStore } from "@/lib/store";
 import { Button, Input, Textarea, Card, Chip, SectionLabel, PageHeader, EmptyState } from "@/components/ui";
 import PlatformPreview from "@/components/composer/PlatformPreview";
 import Link from "next/link";
-import type { GeneratedPost, Platform, TemplateCategory, ScheduledPost } from "@/lib/types";
+import type { GeneratedPost, Platform, RenderedMedia, TemplateCategory, ScheduledPost } from "@/lib/types";
+import type { LayoutId } from "@/lib/brand/model";
+import { LAYOUT_LABELS, layoutKitOf } from "@/lib/render/kit";
 import { CONTENT_TEMPLATES, PLATFORM_LABELS } from "@/lib/templates";
 import { format, addDays } from "date-fns";
 import { sendFeedback, track } from "@/lib/track";
@@ -36,35 +38,69 @@ export default function ComposerPage() {
     format(addDays(new Date(), 1), "yyyy-MM-dd'T'HH:mm")
   );
   const [saved, setSaved] = useState(false);
-  const [imageAspect, setImageAspect] = useState("1:1");
-  const [imageUrl, setImageUrl] = useState<string | null>(null);
-  const [imageLoading, setImageLoading] = useState(false);
-  const [imageError, setImageError] = useState<string | null>(null);
-  const [imageExpiresAt, setImageExpiresAt] = useState<string | null>(null);
+  const [size, setSize] = useState<RenderedMedia["size"]>("1080x1350");
+  const [rendered, setRendered] = useState<RenderedMedia | null>(null);
+  const [rendering, setRendering] = useState(false);
+  const [renderError, setRenderError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const renderSeq = useRef(0);
+  const textTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(textTimer.current), []);
 
-  const generateImage = async () => {
-    if (!post || !brand) return;
-    setImageLoading(true);
-    setImageError(null);
+  type PhotoChoice = RenderedMedia["photo"] | null | "auto" | "generate";
+  const callRender = async (p: GeneratedPost, o: { layout?: LayoutId; photo?: PhotoChoice; size?: RenderedMedia["size"]; store?: boolean; key?: string }) => {
+    const res = await fetch("/api/render-post", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ brandModel: brand?.model, post: p, layout: o.layout ?? p.layout, photo: o.photo, size: o.size ?? size, store: o.store, key: o.key }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.rendered) throw new Error(data.error ?? `Couldn't make the image (HTTP ${res.status})`);
+    return data.rendered as RenderedMedia;
+  };
+
+  /** Renders the branded preview. Only the latest request updates the screen. */
+  const renderPreview = async (p: GeneratedPost, o: { layout?: LayoutId; photo?: PhotoChoice; size?: RenderedMedia["size"] } = {}) => {
+    if (!brand?.model) return;
+    const seq = ++renderSeq.current;
+    setRendering(true);
+    setRenderError(null);
     try {
-      const res = await fetch("/api/generate-image", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: post.imagePrompt, aspect: imageAspect, brandDNA: brand.dna }),
-      });
-      const data = await res.json();
-      if (data.imageUrl) {
-        if (generationId) track("image_generated", { generationId, props: { aspect: imageAspect } });
-        setImageUrl(data.imageUrl);
-        setImageExpiresAt(data.expiresAt ?? null);
-        setSaved(false);
-      } else {
-        setImageError(data.error ?? `Image generation failed (HTTP ${res.status})`);
-      }
+      const r = await callRender(p, o);
+      if (seq !== renderSeq.current) return;
+      setRendered(r);
+      setSaved(false);
+      if (o.photo === "generate" && generationId) track("image_generated", { generationId, props: { layout: r.layout } });
     } catch (err) {
-      setImageError(err instanceof Error ? err.message : String(err));
+      if (seq === renderSeq.current) setRenderError(err instanceof Error ? err.message : String(err));
     }
-    setImageLoading(false);
+    if (seq === renderSeq.current) setRendering(false);
+  };
+
+  // Keep the photo already chosen when only the layout or text changes.
+  const currentPhoto = (): PhotoChoice => rendered?.photo ?? "auto";
+
+  const switchLayout = (l: LayoutId) => {
+    if (!post) return;
+    const next = { ...post, layout: l };
+    setPost(next);
+    renderPreview(next, { layout: l, photo: currentPhoto() });
+  };
+
+  /** Editing the image text re-renders without another AI call. */
+  const editVisualText = (field: "headline" | "subline", value: string) => {
+    if (!post) return;
+    const next = { ...post, [field]: value };
+    setPost(next);
+    clearTimeout(textTimer.current);
+    textTimer.current = setTimeout(() => renderPreview(next, { photo: currentPhoto() }), 600);
+  };
+
+  const brandPhotos = brand?.model?.expression.photos ?? [];
+  const nextBrandPhoto = () => {
+    if (!post || !brandPhotos.length) return;
+    const i = brandPhotos.findIndex((p) => p.path === rendered?.photo?.ref);
+    renderPreview(post, { photo: { kind: "brand", ref: brandPhotos[(i + 1) % brandPhotos.length].path } });
   };
 
   const togglePlatform = (p: Platform) => {
@@ -84,9 +120,8 @@ export default function ComposerPage() {
     setFeedbackSent(false);
     setPost(null);
     setSaved(false);
-    setImageUrl(null);
-    setImageExpiresAt(null);
-    setImageError(null);
+    setRendered(null);
+    setRenderError(null);
     const res = await fetch("/api/generate-post", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -105,24 +140,42 @@ export default function ComposerPage() {
     setGenerationId(data.generationId ?? null);
     if (!data.post) setGenError(data.error ?? "Couldn't write a post. Please try again.");
     setGenerating(false);
+    if (data.post) renderPreview(data.post, { photo: "auto" });
   };
 
-  const schedulePost = (status: "draft" | "scheduled") => {
+  const schedulePost = async (status: "draft" | "scheduled") => {
     if (!post || !brand) return;
+    const id = crypto.randomUUID();
+    setSaving(true);
+    let content: GeneratedPost = { ...post, rendered: undefined };
+    // The preview only lives in the browser: save the branded image(s) to storage now.
+    if (rendered) {
+      try {
+        const stored = await callRender(post, { layout: rendered.layout, photo: rendered.photo ?? null, size: rendered.size, store: true, key: id });
+        content = { ...post, layout: stored.layout, rendered: stored };
+      } catch (err) {
+        setRenderError(err instanceof Error ? err.message : String(err));
+        setSaving(false);
+        return;
+      }
+    }
     const scheduled: ScheduledPost = {
-      id: crypto.randomUUID(),
+      id,
       brandId: brand.id,
-      content: post,
+      content,
       generationId: generationId ?? undefined,
       platforms: selectedPlatforms,
       scheduledAt: new Date(scheduleDate).toISOString(),
       status,
       createdAt: new Date().toISOString(),
-      ...(imageUrl ? { mediaUrl: imageUrl } : {}),
+      ...(content.rendered?.urls[0] ? { mediaUrl: content.rendered.urls[0] } : {}),
     };
     addPost(scheduled, { template: selectedTemplate, topic: topic || undefined });
+    setSaving(false);
     setSaved(true);
   };
+
+  const kit = layoutKitOf(brand?.model);
 
   if (!brand) {
     return (
@@ -291,7 +344,8 @@ export default function ComposerPage() {
                   platforms={selectedPlatforms}
                   brandDNA={brand.dna}
                   igHandle={brand.sources.instagram}
-                  imageUrl={imageUrl}
+                  images={rendered?.urls ?? []}
+                  imageLoading={rendering}
                 />
 
                 {/* All captions */}
@@ -338,39 +392,64 @@ export default function ComposerPage() {
                   </div>
                 </Card>
 
-                {/* Image prompt */}
-                <Card className="p-5">
-                  <SectionLabel>AI Image Generation Prompt</SectionLabel>
-                  <p className="text-sm text-text-muted leading-relaxed bg-surface p-3 rounded-xl mb-4">
-                    {post.imagePrompt}
-                  </p>
-                  <div className="flex gap-2 items-center flex-wrap">
-                    {["1:1", "4:5", "16:9", "9:16"].map((a) => (
-                      <button
-                        key={a}
-                        onClick={() => setImageAspect(a)}
-                        className={`text-xs px-3 py-1.5 rounded-full border transition-all ${
-                          imageAspect === a
-                            ? "bg-accent/10 border-accent/40 text-accent-light"
-                            : "border-border text-text-muted hover:border-accent/30 hover:text-text"
-                        }`}
-                      >
-                        {a}
-                      </button>
-                    ))}
-                    <Button size="sm" className="ml-auto" loading={imageLoading} onClick={generateImage}>
-                      {imageLoading ? "Making image…" : imageUrl ? "New image" : "Make an image"}
-                    </Button>
+                {/* Branded visual */}
+                <Card className="p-5 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <SectionLabel>Visual</SectionLabel>
+                    <div className="flex gap-1" role="group" aria-label="Image size">
+                      {(["1080x1350", "1080x1080"] as const).map((sz) => (
+                        <button
+                          key={sz}
+                          aria-pressed={size === sz}
+                          onClick={() => {
+                            setSize(sz);
+                            renderPreview(post, { size: sz, photo: currentPhoto() });
+                          }}
+                          className={`text-xs px-3 py-1 rounded-full border ${size === sz ? "bg-accent/10 border-accent/40 text-accent-light" : "border-border text-text-muted hover:text-text"}`}
+                        >
+                          {sz === "1080x1350" ? "4:5" : "1:1"}
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                  {imageError && <p className="text-xs text-error mt-3">{imageError}</p>}
-                  {imageUrl && (
-                    <p className="text-[11px] text-text-muted mt-3">
-                      {imageExpiresAt
-                        ? "This image link expires in 24 hours. "
-                        : ""}
-                      The image is saved with the post when you schedule or save it.
-                    </p>
+                  {kit && (
+                    <div className="flex flex-wrap gap-1.5" role="group" aria-label="Layout">
+                      {kit.layouts
+                        .filter((l) => l !== "carousel-cover" || (post.slides?.length ?? 0) >= 2)
+                        .map((l) => (
+                          <button
+                            key={l}
+                            aria-pressed={(rendered?.layout ?? post.layout) === l}
+                            onClick={() => switchLayout(l)}
+                            className={`text-xs px-3 py-1.5 rounded-full border transition-all ${
+                              (rendered?.layout ?? post.layout) === l ? "bg-text text-bg border-text" : "border-border text-text-muted hover:text-text"
+                            }`}
+                          >
+                            {LAYOUT_LABELS[l]}
+                          </button>
+                        ))}
+                    </div>
                   )}
+                  <Input label="Headline on the image" value={post.headline ?? ""} onChange={(e) => editVisualText("headline", e.target.value)} />
+                  <Input label="Supporting line" value={post.subline ?? ""} onChange={(e) => editVisualText("subline", e.target.value)} />
+                  <div className="flex gap-2 flex-wrap items-center">
+                    {brandPhotos.length > 0 && (
+                      <Button size="sm" variant="secondary" disabled={rendering} onClick={nextBrandPhoto}>
+                        Use a brand photo
+                      </Button>
+                    )}
+                    <Button size="sm" variant="secondary" disabled={rendering} onClick={() => renderPreview(post, { photo: "generate" })}>
+                      New AI photo
+                    </Button>
+                    {rendering && <span className="text-xs text-text-muted">Laying out your post…</span>}
+                  </div>
+                  {post.imagePrompt && (
+                    <details className="text-xs text-text-muted">
+                      <summary className="cursor-pointer">Photo brief</summary>
+                      <p className="mt-2 leading-relaxed">{post.imagePrompt}</p>
+                    </details>
+                  )}
+                  {renderError && <p className="text-xs text-error">{renderError}</p>}
                 </Card>
 
                 {/* Schedule */}
@@ -387,10 +466,10 @@ export default function ComposerPage() {
                       />
                     </div>
                     <div className="flex gap-2">
-                      <Button variant="ghost" onClick={() => schedulePost("draft")} disabled={saved}>
+                      <Button variant="ghost" onClick={() => schedulePost("draft")} disabled={saved || saving}>
                         Save Draft
                       </Button>
-                      <Button onClick={() => schedulePost("scheduled")} disabled={saved}>
+                      <Button onClick={() => schedulePost("scheduled")} disabled={saved || saving} loading={saving}>
                         {saved ? "✓ Scheduled!" : "📅 Schedule Post"}
                       </Button>
                     </div>

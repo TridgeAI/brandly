@@ -113,3 +113,44 @@ export const VisualInsightsSchema = z.object({
   tone: str,
 });
 export type VisualInsights = z.infer<typeof VisualInsightsSchema>;
+
+// ── Generated post (generate-post@2) ────────────────────────────────────────
+const shortList = (max: number) => z.array(z.string()).catch([]).transform((a) => a.map((s) => s.trim()).filter(Boolean).slice(0, max));
+
+export const VisualBriefSchema = z.object({
+  subject: str,
+  setting: str,
+  lighting: str,
+  composition: str,
+  usesProductPhoto: z.coerce.boolean().catch(false),
+});
+
+export const GeneratedPostSchema = z.object({
+  caption: z.string().min(20),
+  hashtags: shortList(10).transform((a) => a.map((h) => (h.startsWith("#") ? h : `#${h}`).replace(/\s+/g, ""))),
+  cta: str,
+  headline: z.string().min(2).transform((h) => h.trim().replace(/^["']|["']$/g, "")),
+  subline: str,
+  items: shortList(6),
+  stat: str,
+  slides: z
+    .array(z.object({ headline: str, body: str }))
+    .catch([])
+    .transform((a) => a.filter((s) => s.headline).slice(0, 8)),
+  visualBrief: VisualBriefSchema.catch({ subject: "", setting: "", lighting: "", composition: "", usesProductPhoto: false }),
+  bestTimeToPost: str,
+  postType: str,
+  platformVariants: z.record(z.string()).catch({}),
+});
+export type GeneratedPostResult = z.infer<typeof GeneratedPostSchema>;
+
+// ── Layout kit (once per brand) ─────────────────────────────────────────────
+export const LayoutKitSchema = z.object({
+  layouts: z.array(z.string()).catch([]),
+  radius: z.coerce.number().min(0).max(64).catch(16),
+  photoTreatment: z.enum(["full", "framed", "duotone"]).catch("full"),
+  headlineCase: z.enum(["upper", "title", "sentence"]).catch("sentence"),
+  accentShape: z.enum(["none", "bar", "circle", "underline", "corner"]).catch("bar"),
+  logoPosition: z.enum(["top-left", "top-right", "bottom-left", "bottom-right"]).catch("bottom-left"),
+  background: z.enum(["primary", "secondary", "accent", "neutral"]).catch("primary"),
+});

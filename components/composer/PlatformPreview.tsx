@@ -9,11 +9,15 @@ interface Props {
   platforms: Platform[];
   brandDNA?: BrandDNA | null;
   igHandle?: string;
-  imageUrl?: string | null;
+  /** Branded image(s) from /api/render-post; several = carousel. */
+  images?: string[];
+  imageLoading?: boolean;
 }
 
-export default function PlatformPreview({ post, platforms, brandDNA, igHandle, imageUrl }: Props) {
+export default function PlatformPreview({ post, platforms, brandDNA, igHandle, images = [], imageLoading }: Props) {
   const [active, setActive] = useState<Platform>(platforms[0]);
+  const [slide, setSlide] = useState(0);
+  const imageUrl = images[Math.min(slide, images.length - 1)] ?? null;
 
   const getCaption = () => {
     return post.platformVariants?.[active] ?? post.caption;
@@ -75,27 +79,48 @@ export default function PlatformPreview({ post, platforms, brandDNA, igHandle, i
           </div>
         </div>
 
-        {/* Generated image */}
+        {/* Branded image (or carousel) */}
         {imageUrl && (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={imageUrl}
-            alt={post.imagePrompt}
-            className="w-full object-cover border-b border-border"
-          />
+          <div className={clsx("relative border-b border-border transition-opacity", imageLoading && "opacity-60")}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={imageUrl} alt={post.headline || post.imagePrompt} className="w-full object-cover" />
+            {images.length > 1 && (
+              <>
+                <span className="absolute top-3 right-3 text-[11px] px-2 py-0.5 rounded-full bg-black/60 text-white">
+                  {Math.min(slide, images.length - 1) + 1}/{images.length}
+                </span>
+                <button
+                  aria-label="Previous slide"
+                  disabled={slide === 0}
+                  onClick={() => setSlide((i) => Math.max(0, i - 1))}
+                  className="absolute left-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/50 text-white disabled:opacity-0"
+                >
+                  ‹
+                </button>
+                <button
+                  aria-label="Next slide"
+                  disabled={slide >= images.length - 1}
+                  onClick={() => setSlide((i) => Math.min(images.length - 1, i + 1))}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/50 text-white disabled:opacity-0"
+                >
+                  ›
+                </button>
+              </>
+            )}
+          </div>
         )}
 
         {/* Image placeholder */}
         {!imageUrl && (active === "instagram" || active === "facebook") && (
           <div
-            className="aspect-square flex flex-col items-center justify-center p-6 text-center border-b border-border"
+            className="aspect-[4/5] flex flex-col items-center justify-center p-6 text-center border-b border-border"
             style={{
               background: brandDNA
                 ? `linear-gradient(135deg, ${brandDNA.colors.primary}18, ${brandDNA.colors.secondary}18)`
                 : "rgb(var(--text) / 0.04)",
             }}
           >
-            <p className="text-xs font-medium text-text mb-2">Image idea</p>
+            <p className="text-xs font-medium text-text mb-2">{imageLoading ? "Laying out your post…" : "Image idea"}</p>
             <p className="text-xs text-text-muted leading-relaxed max-w-xs">{post.imagePrompt}</p>
           </div>
         )}

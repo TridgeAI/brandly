@@ -9,6 +9,8 @@ import { Button, Card, EmptyState, Input, Textarea } from "@/components/ui";
 import { ChipGroup, LockButton, SourceTag, TierCards } from "@/components/onboarding/kit";
 import { BrandPostPreview } from "@/components/brand/BrandPreview";
 import { DeleteBrandDialog } from "@/components/brand/DeleteBrandDialog";
+import { LayoutKitEditor } from "@/components/brand/LayoutKitEditor";
+import { BrandPhotos } from "@/components/brand/BrandPhotos";
 import { useStore } from "@/lib/store";
 import { fromBrandDNA } from "@/lib/brand/projection";
 import { isLocked, mergePatch, sectionConfidence, setLock } from "@/lib/brand/merge";
@@ -305,6 +307,14 @@ function BrandProfile() {
                 </div>
               ))}
             </div>
+          </Section>
+
+          <Section id="expression.layoutKit" title="Post layouts" description="How your posts look: Brandly lays out every image with your fonts, colours and logo" model={model} onLock={lock}>
+            <LayoutKitEditor model={model} onChange={(kit) => edit({ expression: { layoutKit: kit } })} />
+          </Section>
+
+          <Section id="expression.photos" title="Brand photos" description="Real photos used in product, offer and testimonial posts" model={model} onLock={lock}>
+            <BrandPhotos model={model} onChange={(photos) => save({ ...model, expression: { ...model.expression, photos } })} />
           </Section>
 
           <Section id="voice" title="Voice" description="Move the sliders and watch the sample line change" model={model} onLock={lock}>

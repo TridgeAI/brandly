@@ -14,7 +14,7 @@
       "parameters": {
         "width": 380,
         "height": 520,
-        "content": "## Brandly Backend\nBrandly (Next.js) is the frontend. Its `/api/*` routes forward to these webhooks when `N8N_WEBHOOK_BASE_URL` is set.\n\n**Webhooks** (POST, header `X-Brandly-Secret`):\n- `brandly-analyse-brand`\n- `brandly-analyse-pdf`\n- `brandly-generate-post`\n- `brandly-automation`\n- `brandly-generate-image`\n- `brandly-publish`\n\n**Credentials**\n- *Brandly Webhook Secret*: must match `N8N_WEBHOOK_SECRET` in Brandly's `.env.local`\n- *Google Gemini*: used by **Call Gemini** (model is in its URL)\n- *Pollinations API Key*: header `Authorization: Bearer <key>`, main image provider\n- *Alibaba Model Studio API Key*: header `Authorization: Bearer <key>`, backup image provider (models set in **Build: Image Request**)\n- *Ayrshare API Key*: header `Authorization: Bearer <key>`, used for publishing"
+        "content": "## Brandly Backend\nBrandly (Next.js) is the frontend. Its `/api/*` routes forward to these webhooks when `N8N_WEBHOOK_BASE_URL` is set.\n\n**Webhooks** (POST, header `X-Brandly-Secret`):\n- `brandly-analyse-brand`\n- `brandly-analyse-pdf`\n- `brandly-generate-post`\n- `brandly-automation`\n- `brandly-generate-image`\n- `brandly-publish`\n\n**Credentials**\n- *Brandly Webhook Secret*: must match `N8N_WEBHOOK_SECRET` in Brandly's `.env.local`\n- *Google Gemini*: used by **Call Gemini** (model is in its URL)\n- *Pollinations API Key*: header `Authorization: Bearer <key>`, main image provider\n- *Alibaba Model Studio API Key*: header `Authorization: Bearer <key>`, backup image provider (models set in **Build: Image Request**)\n- *Postiz API Key*: header `Authorization: <key>` (no Bearer), from Postiz → Settings → Developers → Public API. Postiz URL is set in the three **Postiz:** nodes (`host.docker.internal:4007`)"
       }
     },
     {
@@ -195,7 +195,7 @@
         400
       ],
       "parameters": {
-        "jsCode": "// Builds the \"full post package\" prompt (port of Brandly's /api/generate-post).\nconst body = $('Webhook: Generate Post').first().json.body || {};\n\nconst TEMPLATES = {\n  product_launch: ['Product Launch', 'Focus on the key benefit, create urgency, include a strong CTA'],\n  announcement: ['Announcement', 'Conversational, celebratory tone - make followers feel part of the journey'],\n  engagement: ['Engagement', 'Ask one clear question, make it easy and fun to answer'],\n  educational: ['Educational', 'Use 3-5 clear tips or steps, establish expertise without being dry'],\n  behind_scenes: ['Behind the Scenes', 'Personal, authentic, humanise the brand - show process not perfection'],\n  testimonial: ['Testimonial', 'Lead with the result, make it relatable, include social proof elements'],\n  seasonal: ['Seasonal / Trending', 'Connect the trend to the brand naturally - avoid forced relevance'],\n  ugc: ['UGC / Repost', 'Grateful, community-focused tone - give credit and invite more'],\n};\nconst LIMITS = { instagram: 2200, facebook: 63206, linkedin: 3000, twitter: 280 };\n\nif (!body.brandDNA) {\n  return [{ json: { statusCode: 400, body: { error: 'brandDNA is required' } } }];\n}\nconst platforms = (Array.isArray(body.platforms) && body.platforms.length ? body.platforms : ['instagram'])\n  .filter((p) => LIMITS[p]);\nconst [label, hint] = TEMPLATES[body.template] || ['General', 'On-brand, engaging social post'];\n\nconst system = `You are an expert social media content strategist.\nYou write deeply on-brand content that feels human, not AI-generated.\nReturn ONLY a JSON object.`;\n\nconst user = `Brand DNA:\n${JSON.stringify(body.brandDNA, null, 2)}\n\nContent request:\n- Template: ${label} - ${hint}\n- Topic/focus: ${body.topic || 'general brand content'}\n- Platforms: ${platforms.join(', ')}\n- Character limits: ${platforms.map((p) => `${p}: ${LIMITS[p]} chars`).join(', ')}\n- Tone override: ${body.tone || 'match brand tone'}\n- Additional context: ${body.additionalContext || 'none'}\n\nReturn this JSON shape:\n{\n  \"caption\": string (primary caption, optimised for Instagram, within 2200 chars),\n  \"hashtags\": string[] (8-15 hashtags, mix of broad and niche, each including the # symbol),\n  \"imagePrompt\": string (detailed image-generation prompt matching the brand visual style, 2-3 sentences),\n  \"cta\": string (clear call to action, 1 sentence),\n  \"bestTimeToPost\": string (e.g. \"Tuesday-Thursday, 7-9am or 6-8pm\"),\n  \"postType\": string (e.g. \"Carousel\", \"Single image\", \"Reel\", \"Story\"),\n  \"platformVariants\": {\n    \"instagram\": string (caption adapted for Instagram),\n    \"facebook\": string (longer, more conversational, no hashtags needed),\n    \"linkedin\": string (professional tone, insight-driven, 3 hashtags max),\n    \"twitter\": string (punchy, under 280 chars including hashtags)\n  }\n}\n\nRules:\n- platformVariants must only include the requested platforms: ${platforms.join(', ')}\n- Write captions that sound like a real human, not AI\n- Embed the brand's communication tone and vibe naturally`;\n\nreturn [{\n  json: {\n    route: 'generate-post',\n    resultKey: 'post',\n    request: { system, parts: [{ text: user }] },\n  },\n}];\n"
+        "jsCode": "// Builds the \"full post package\" prompt (port of Brandly's /api/generate-post).\nconst body = $('Webhook: Generate Post').first().json.body || {};\n\nconst TEMPLATES = {\n  product_launch: ['Product Launch', 'Focus on the key benefit, create urgency, include a strong CTA'],\n  announcement: ['Announcement', 'Conversational, celebratory tone - make followers feel part of the journey'],\n  engagement: ['Engagement', 'Ask one clear question, make it easy and fun to answer'],\n  educational: ['Educational', 'Use 3-5 clear tips or steps, establish expertise without being dry'],\n  behind_scenes: ['Behind the Scenes', 'Personal, authentic, humanise the brand - show process not perfection'],\n  testimonial: ['Testimonial', 'Lead with the result, make it relatable, include social proof elements'],\n  seasonal: ['Seasonal / Trending', 'Connect the trend to the brand naturally - avoid forced relevance'],\n  ugc: ['UGC / Repost', 'Grateful, community-focused tone - give credit and invite more'],\n};\nconst LIMITS = { instagram: 2200, facebook: 63206, linkedin: 3000, twitter: 280 };\n\n// Brandly (generate-post@2) sends the finished prompt: brief, history and full brand context.\nif (body.prompt && body.prompt.user) {\n  return [{\n    json: {\n      route: 'generate-post',\n      resultKey: 'post',\n      request: {\n        system: body.prompt.system + (body.brandContext ? '\\n\\n' + body.brandContext : ''),\n        parts: [{ text: body.prompt.user }],\n        temperature: body.prompt.temperature,\n      },\n    },\n  }];\n}\n\nif (!body.brandDNA && !body.brandContext) {\n  return [{ json: { statusCode: 400, body: { error: 'brandDNA is required' } } }];\n}\nconst platforms = (Array.isArray(body.platforms) && body.platforms.length ? body.platforms : ['instagram'])\n  .filter((p) => LIMITS[p]);\nconst [label, hint] = TEMPLATES[body.template] || ['General', 'On-brand, engaging social post'];\n\nconst system = `You are an expert social media content strategist.\nYou write deeply on-brand content that feels human, not AI-generated.\nReturn ONLY a JSON object.`;\n\nconst user = `${body.brandContext || 'Brand DNA:\\n' + JSON.stringify(body.brandDNA, null, 2)}\n\nContent request:\n- Template: ${label} - ${hint}\n- Topic/focus: ${body.topic || 'general brand content'}\n- Platforms: ${platforms.join(', ')}\n- Character limits: ${platforms.map((p) => `${p}: ${LIMITS[p]} chars`).join(', ')}\n- Tone override: ${body.tone || 'match brand tone'}\n- Additional context: ${body.additionalContext || 'none'}\n\nReturn this JSON shape:\n{\n  \"caption\": string (primary caption, optimised for Instagram, within 2200 chars),\n  \"hashtags\": string[] (8-15 hashtags, mix of broad and niche, each including the # symbol),\n  \"imagePrompt\": string (detailed image-generation prompt matching the brand visual style, 2-3 sentences),\n  \"cta\": string (clear call to action, 1 sentence),\n  \"bestTimeToPost\": string (e.g. \"Tuesday-Thursday, 7-9am or 6-8pm\"),\n  \"postType\": string (e.g. \"Carousel\", \"Single image\", \"Reel\", \"Story\"),\n  \"platformVariants\": {\n    \"instagram\": string (caption adapted for Instagram),\n    \"facebook\": string (longer, more conversational, no hashtags needed),\n    \"linkedin\": string (professional tone, insight-driven, 3 hashtags max),\n    \"twitter\": string (punchy, under 280 chars including hashtags)\n  }\n}\n\nRules:\n- platformVariants must only include the requested platforms: ${platforms.join(', ')}\n- Write captions that sound like a real human, not AI\n- Embed the brand's communication tone and vibe naturally`;\n\nreturn [{\n  json: {\n    route: 'generate-post',\n    resultKey: 'post',\n    request: { system, parts: [{ text: user }] },\n  },\n}];\n"
       }
     },
     {
@@ -351,7 +351,7 @@
         640
       ],
       "parameters": {
-        "jsCode": "// Builds the automation prompt. Input comes from \"Read RSS Feed\", \"Fetch Product Page\",\n// or straight from the Switch (recurring / unknown trigger).\nconst body = $('Webhook: Automation').first().json.body || {};\nif (!body.brandDNA) {\n  return [{ json: { statusCode: 400, body: { error: 'brandDNA is required' } } }];\n}\n\nconst cfg = body.triggerConfig || { type: body.triggerType };\nconst platforms = Array.isArray(body.platforms) && body.platforms.length ? body.platforms : ['instagram'];\nconst items = $input.all().map((i) => i.json);\nlet context = '';\n\nif (cfg.type === 'rss') {\n  const articles = items.filter((j) => j && j.title);\n  if (articles.length) {\n    const a = articles[0]; // newest item\n    const snippet = String(a.contentSnippet || a.content || a.summary || '').slice(0, 1500);\n    context = `Latest RSS article from ${cfg.feedUrl}:\\nTitle: ${a.title}\\nLink: ${a.link || ''}\\nPublished: ${a.isoDate || a.pubDate || ''}\\nSnippet: ${snippet}`;\n  } else {\n    context = `No articles could be read from RSS feed: ${cfg.feedUrl}`;\n  }\n} else if (cfg.type === 'product_update') {\n  const html = items[0] && typeof items[0].data === 'string' ? items[0].data : '';\n  const text = html\n    .replace(/<script[\\s\\S]*?<\\/script>/gi, ' ')\n    .replace(/<style[\\s\\S]*?<\\/style>/gi, ' ')\n    .replace(/<[^>]+>/g, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim()\n    .slice(0, 3000);\n  context = text\n    ? `Product page content from ${cfg.sourceUrl}:\\n${text}`\n    : `Could not read product page: ${cfg.sourceUrl}`;\n} else if (cfg.type === 'recurring') {\n  context = `Recurring post - topic: ${cfg.topic || 'general brand content'}`;\n} else {\n  context = body.triggerContext || 'No specific context provided.';\n}\n\nconst system = `You are an automated social media content generator.\nGenerate content based on the provided trigger context and brand DNA.\nReturn ONLY a JSON object.`;\n\nconst user = `Brand DNA:\n${JSON.stringify(body.brandDNA, null, 2)}\n\nAutomation trigger:\n- Type: ${cfg.type || 'unknown'}\n- Context: ${context}\n- Target platforms: ${platforms.join(', ')}\n\nAuto-generate a post and return:\n{\n  \"caption\": string,\n  \"hashtags\": string[] (each including the # symbol),\n  \"imagePrompt\": string,\n  \"cta\": string,\n  \"bestTimeToPost\": string,\n  \"postType\": string,\n  \"platformVariants\": { one entry per target platform: ${platforms.join(', ')} }\n}`;\n\nreturn [{\n  json: {\n    route: 'automation',\n    resultKey: 'post',\n    request: { system, parts: [{ text: user }] },\n  },\n}];\n"
+        "jsCode": "// Builds the automation prompt. Input comes from \"Read RSS Feed\", \"Fetch Product Page\",\n// or straight from the Switch (recurring / unknown trigger).\nconst body = $('Webhook: Automation').first().json.body || {};\nif (!body.brandDNA && !body.brandContext && !body.prompt) {\n  return [{ json: { statusCode: 400, body: { error: 'brandDNA is required' } } }];\n}\n\nconst cfg = body.triggerConfig || { type: body.triggerType };\nconst platforms = Array.isArray(body.platforms) && body.platforms.length ? body.platforms : ['instagram'];\nconst items = $input.all().map((i) => i.json);\nlet context = '';\n\nif (cfg.type === 'rss') {\n  const articles = items.filter((j) => j && j.title);\n  if (articles.length) {\n    const a = articles[0]; // newest item\n    const snippet = String(a.contentSnippet || a.content || a.summary || '').slice(0, 1500);\n    context = `Latest RSS article from ${cfg.feedUrl}:\\nTitle: ${a.title}\\nLink: ${a.link || ''}\\nPublished: ${a.isoDate || a.pubDate || ''}\\nSnippet: ${snippet}`;\n  } else {\n    context = `No articles could be read from RSS feed: ${cfg.feedUrl}`;\n  }\n} else if (cfg.type === 'product_update') {\n  const html = items[0] && typeof items[0].data === 'string' ? items[0].data : '';\n  const text = html\n    .replace(/<script[\\s\\S]*?<\\/script>/gi, ' ')\n    .replace(/<style[\\s\\S]*?<\\/style>/gi, ' ')\n    .replace(/<[^>]+>/g, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim()\n    .slice(0, 3000);\n  context = text\n    ? `Product page content from ${cfg.sourceUrl}:\\n${text}`\n    : `Could not read product page: ${cfg.sourceUrl}`;\n} else if (cfg.type === 'recurring') {\n  context = `Recurring post - topic: ${cfg.topic || 'general brand content'}`;\n} else {\n  context = body.triggerContext || 'No specific context provided.';\n}\n\n// Brandly (generate-post@2) sends the finished prompt; fill in what this workflow read.\nif (body.prompt && body.prompt.user) {\n  return [{\n    json: {\n      route: 'automation',\n      resultKey: 'post',\n      request: {\n        system: body.prompt.system + (body.brandContext ? '\\n\\n' + body.brandContext : ''),\n        parts: [{ text: String(body.prompt.user).split('{{TRIGGER_CONTEXT}}').join(context) }],\n        temperature: body.prompt.temperature,\n      },\n    },\n  }];\n}\n\nconst system = `You are an automated social media content generator.\nGenerate content based on the provided trigger context and brand DNA.\nReturn ONLY a JSON object.`;\n\nconst user = `${body.brandContext || 'Brand DNA:\\n' + JSON.stringify(body.brandDNA, null, 2)}\n\nAutomation trigger:\n- Type: ${cfg.type || 'unknown'}\n- Context: ${context}\n- Target platforms: ${platforms.join(', ')}\n\nAuto-generate a post and return:\n{\n  \"caption\": string,\n  \"hashtags\": string[] (each including the # symbol),\n  \"imagePrompt\": string,\n  \"cta\": string,\n  \"bestTimeToPost\": string,\n  \"postType\": string,\n  \"platformVariants\": { one entry per target platform: ${platforms.join(', ')} }\n}`;\n\nreturn [{\n  json: {\n    route: 'automation',\n    resultKey: 'post',\n    request: { system, parts: [{ text: user }] },\n  },\n}];\n"
       }
     },
     {
@@ -405,7 +405,7 @@
         "nodeCredentialType": "googlePalmApi",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ systemInstruction: { parts: [{ text: $('Ready for AI?').first().json.request.system }] }, contents: [{ role: 'user', parts: $('Ready for AI?').first().json.request.parts }], generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 16384 } }) }}",
+        "jsonBody": "={{ JSON.stringify({ systemInstruction: { parts: [{ text: $('Ready for AI?').first().json.request.system }] }, contents: [{ role: 'user', parts: $('Ready for AI?').first().json.request.parts }], generationConfig: { responseMimeType: 'application/json', temperature: $('Ready for AI?').first().json.request.temperature, maxOutputTokens: 16384 } }) }}",
         "options": {
           "timeout": 45000
         }
@@ -435,7 +435,7 @@
         "nodeCredentialType": "googlePalmApi",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ systemInstruction: { parts: [{ text: $('Ready for AI?').first().json.request.system }] }, contents: [{ role: 'user', parts: $('Ready for AI?').first().json.request.parts }], generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 16384 } }) }}",
+        "jsonBody": "={{ JSON.stringify({ systemInstruction: { parts: [{ text: $('Ready for AI?').first().json.request.system }] }, contents: [{ role: 'user', parts: $('Ready for AI?').first().json.request.parts }], generationConfig: { responseMimeType: 'application/json', temperature: $('Ready for AI?').first().json.request.temperature, maxOutputTokens: 16384 } }) }}",
         "options": {
           "timeout": 90000
         }
@@ -528,7 +528,7 @@
         1240
       ],
       "parameters": {
-        "jsCode": "// Builds the image requests: Pollinations (primary) and Alibaba Qwen-Image (backup).\n// Body: { prompt: string, aspect?: \"1:1\"|\"4:5\"|\"4:3\"|\"16:9\"|\"9:16\", brandDNA?: BrandDNA, negativePrompt?: string }\nconst POLLINATIONS_MODEL = 'tongyi-mai/z-image-turbo'; // cheap + good; also black-forest-labs/flux.1-schnell (cheapest)\nconst ALIBABA_MODEL = 'qwen-image-3.0';                 // also qwen-image-3.0-pro, qwen-image-2.1-turbo\n\nconst body = $('Webhook: Generate Image').first().json.body || {};\nconst prompt = String(body.prompt || '').trim();\nif (!prompt) {\n  return [{ json: { statusCode: 400, body: { error: 'prompt is required' } } }];\n}\n\nconst SIZES = {\n  //        Pollinations (WxH)   Alibaba (W*H, 512^2..2048^2)\n  '1:1':  ['1024x1024', '1328*1328'],\n  '4:5':  ['1024x1280', '1104*1380'],\n  '4:3':  ['1152x864',  '1472*1104'],\n  '16:9': ['1344x768',  '1664*928'],\n  '9:16': ['768x1344',  '928*1664'],\n};\nconst aspect = SIZES[body.aspect] ? body.aspect : '1:1';\n\n// Add the brand's art direction so every image matches the Brand DNA\nlet direction = '';\nconst dna = body.brandDNA;\nif (dna) {\n  const c = dna.colors || {};\n  direction =\n    ` Brand art direction: ${dna.visual_style || 'on-brand'}.` +\n    ` Colour palette: ${[c.primary, c.secondary, c.accent, c.neutral].filter(Boolean).join(', ')}.` +\n    (Array.isArray(dna.vibe) && dna.vibe.length ? ` Mood: ${dna.vibe.join(', ')}.` : '');\n}\nconst suffix = ' Do not add text, logos or watermarks unless the prompt asks for them.';\n\n// Keep the whole prompt within 800 characters (Alibaba's limit), trimming the scene description first\nconst room = 800 - direction.length - suffix.length;\nconst text = (prompt.length > room ? prompt.slice(0, Math.max(room - 3, 0)) + '...' : prompt) + direction + suffix;\nconst negative = body.negativePrompt || 'blurry, low quality, distorted, deformed, watermark, garbled text';\n\nreturn [{\n  json: {\n    route: 'generate-image',\n    aspect,\n    request: {\n      pollinations: {\n        model: POLLINATIONS_MODEL,\n        prompt: text,\n        size: SIZES[aspect][0],\n        n: 1,\n        response_format: 'url',\n      },\n      alibaba: {\n        model: ALIBABA_MODEL,\n        input: { messages: [{ role: 'user', content: [{ text }] }] },\n        parameters: { size: SIZES[aspect][1], n: 1, watermark: false, prompt_extend: true, negative_prompt: negative },\n      },\n    },\n  },\n}];\n"
+        "jsCode": "// Builds the image requests: Pollinations (primary) and Alibaba Qwen-Image (backup).\n// Body: { prompt: string, aspect?: \"1:1\"|\"4:5\"|\"4:3\"|\"16:9\"|\"9:16\", brandDNA?: BrandDNA, negativePrompt?: string }\nconst POLLINATIONS_MODEL = 'tongyi-mai/z-image-turbo'; // cheap + good; also black-forest-labs/flux.1-schnell (cheapest)\nconst ALIBABA_MODEL = 'qwen-image-3.0';                 // also qwen-image-3.0-pro, qwen-image-2.1-turbo\n\nconst body = $('Webhook: Generate Image').first().json.body || {};\nconst prompt = String(body.prompt || '').trim();\nif (!prompt) {\n  return [{ json: { statusCode: 400, body: { error: 'prompt is required' } } }];\n}\n\nconst SIZES = {\n  //        Pollinations (WxH)   Alibaba (W*H, 512^2..2048^2)\n  '1:1':  ['1024x1024', '1328*1328'],\n  '4:5':  ['1024x1280', '1104*1380'],\n  '4:3':  ['1152x864',  '1472*1104'],\n  '16:9': ['1344x768',  '1664*928'],\n  '9:16': ['768x1344',  '928*1664'],\n};\nconst aspect = SIZES[body.aspect] ? body.aspect : '1:1';\n\n// Image models ignore hex codes, so colours are described in words.\nfunction colourWord(hex) {\n  const m = String(hex || '').match(/^#?([0-9a-f]{6})$/i);\n  if (!m) return '';\n  const [r, g, b] = [0, 2, 4].map((i) => parseInt(m[1].slice(i, i + 2), 16) / 255);\n  const max = Math.max(r, g, b), min = Math.min(r, g, b), l = (max + min) / 2, d = max - min;\n  const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1));\n  if (s < 0.12) return l > 0.93 ? 'off-white' : l > 0.75 ? 'light grey' : l > 0.45 ? 'mid grey' : l > 0.15 ? 'charcoal' : 'near-black';\n  let h = d === 0 ? 0 : max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;\n  h = (h * 60 + 360) % 360;\n  const names = [[15, 'red'], [40, 'orange'], [55, 'amber'], [70, 'yellow'], [90, 'olive'], [150, 'green'], [175, 'teal'], [200, 'cyan'], [235, 'blue'], [260, 'indigo'], [290, 'purple'], [330, 'magenta'], [350, 'pink'], [361, 'red']];\n  const hue = names.find(([max]) => h < max)[1];\n  const tone = l > 0.82 ? 'pale ' : l > 0.65 ? 'light ' : l < 0.22 ? 'deep ' : l < 0.38 ? 'dark ' : '';\n  return tone + hue;\n}\n\n// Brandly's composer sends a finished prompt built from the post's visual brief (styled: true).\nlet direction = '';\nconst dna = body.brandDNA;\nif (dna && !body.styled) {\n  const c = dna.colors || {};\n  const words = [...new Set([c.primary, c.secondary, c.accent].map(colourWord).filter(Boolean))];\n  direction =\n    ` Brand art direction: ${dna.visual_style || 'on-brand'}.` +\n    (words.length ? ` Colour mood: ${words.join(', ')} tones.` : '') +\n    (Array.isArray(dna.vibe) && dna.vibe.length ? ` Mood: ${dna.vibe.join(', ')}.` : '');\n}\nconst suffix = body.styled ? '' : ' Do not add text, logos or watermarks unless the prompt asks for them.';\n\n// Keep the whole prompt within 800 characters (Alibaba's limit), trimming the scene description first\nconst room = 800 - direction.length - suffix.length;\nconst text = (prompt.length > room ? prompt.slice(0, Math.max(room - 3, 0)) + '...' : prompt) + direction + suffix;\nconst negative = body.negativePrompt || 'blurry, low quality, distorted, deformed, watermark, garbled text';\n\nreturn [{\n  json: {\n    route: 'generate-image',\n    aspect,\n    request: {\n      pollinations: {\n        model: POLLINATIONS_MODEL,\n        prompt: text,\n        size: SIZES[aspect][0],\n        n: 1,\n        response_format: 'url',\n      },\n      alibaba: {\n        model: ALIBABA_MODEL,\n        input: { messages: [{ role: 'user', content: [{ text }] }] },\n        parameters: { size: SIZES[aspect][1], n: 1, watermark: false, prompt_extend: true, negative_prompt: negative },\n      },\n    },\n  },\n}];\n"
       }
     },
     {
@@ -680,25 +680,53 @@
       }
     },
     {
-      "id": "ddd2df59-22cf-40f5-bcf3-f4de14a5ffea",
-      "name": "Build: Publish Requests",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "id": "be47df29-379b-4830-b9dc-212a5da40d08",
+      "name": "Postiz: List Channels",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [
         240,
         960
       ],
       "parameters": {
-        "jsCode": "// Turns a Brandly ScheduledPost into one Ayrshare request per platform.\n// Body: { post: ScheduledPost, platforms?: string[], mediaUrls?: string[], publishAt?: ISO, profileKey?: string }\nconst body = $('Webhook: Publish').first().json.body || {};\nconst post = body.post || {};\nconst content = post.content || {};\nconst platforms = (body.platforms || post.platforms || []).filter(Boolean);\n\nconst AYRSHARE_NAME = { instagram: 'instagram', facebook: 'facebook', linkedin: 'linkedin', twitter: 'twitter' };\nconst mediaUrls = (body.mediaUrls || (post.mediaUrl ? [post.mediaUrl] : []))\n  .filter((u) => typeof u === 'string' && /^https?:\\/\\//i.test(u));\n\nlet scheduleDate = null;\nif (body.publishAt) {\n  const d = new Date(body.publishAt);\n  if (!isNaN(d.getTime()) && d.getTime() > Date.now() + 60 * 1000) scheduleDate = d.toISOString();\n}\n\nconst headers = { 'Content-Type': 'application/json' };\nif (body.profileKey) headers['Profile-Key'] = String(body.profileKey);\n\nconst hashtags = Array.isArray(content.hashtags) ? content.hashtags.join(' ') : '';\nconst jobs = [];\nconst invalid = [];\n\nif (!platforms.length) invalid.push({ platform: 'all', ok: false, error: 'No platforms selected' });\n\nfor (const p of platforms) {\n  const name = AYRSHARE_NAME[p];\n  if (!name) { invalid.push({ platform: p, ok: false, error: 'Unsupported platform' }); continue; }\n\n  const variants = content.platformVariants || {};\n  let text = variants[p] || [content.caption, hashtags].filter(Boolean).join('\\n\\n');\n  if (!text) { invalid.push({ platform: p, ok: false, error: 'Post has no text' }); continue; }\n  if (p === 'twitter' && text.length > 280) text = text.slice(0, 277) + '...';\n  if (p === 'instagram' && mediaUrls.length === 0) {\n    invalid.push({ platform: p, ok: false, error: 'Instagram needs an image or video URL (mediaUrl)' });\n    continue;\n  }\n\n  const payload = { post: text, platforms: [name] };\n  if (mediaUrls.length) payload.mediaUrls = mediaUrls;\n  if (scheduleDate) payload.scheduleDate = scheduleDate;\n  jobs.push({ platform: p, headers, payload });\n}\n\nreturn [{ json: { postId: post.id || null, scheduleDate, jobs, invalid } }];\n"
+        "method": "GET",
+        "url": "http://host.docker.internal:4007/api/public/v1/integrations",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PostizApiKey0001",
+          "name": "Postiz API Key"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "9a232906-1115-4ec6-9c58-ee7e0d12f1ec",
+      "name": "Collect Media",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        960
+      ],
+      "parameters": {
+        "jsCode": "// One item per image URL to copy into Postiz storage (Postiz only posts media it has stored).\nconst body = $('Webhook: Publish').first().json.body || {};\nconst post = body.post || {};\nconst urls = (body.mediaUrls || (post.mediaUrl ? [post.mediaUrl] : []))\n  .filter((u) => typeof u === 'string' && /^https?:\\/\\//i.test(u));\nreturn urls.length ? urls.map((url) => ({ json: { url } })) : [{ json: { url: null } }];\n"
       }
     },
     {
-      "id": "21d637be-2f9d-477d-8865-989603ee82d6",
-      "name": "Anything to Send?",
+      "id": "27fb0e7b-fc3e-4c1d-9997-f3cdfaabec8b",
+      "name": "Has Media?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        480,
+        720,
         960
       ],
       "parameters": {
@@ -711,7 +739,85 @@
           },
           "conditions": [
             {
-              "id": "31c61c45-7e66-4273-9ed8-ea5fe2381d72",
+              "id": "41eaf13c-1bd6-4f77-a7aa-4ecce77bd24c",
+              "leftValue": "={{ !!$json.url }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      }
+    },
+    {
+      "id": "e612aa47-6399-465b-95af-ca35a123f880",
+      "name": "Postiz: Upload Media",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        880
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:4007/api/public/v1/upload-from-url",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 60000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ url: $json.url }) }}"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PostizApiKey0001",
+          "name": "Postiz API Key"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "id": "42947771-cd2c-44fe-91e0-23fbc7660cb1",
+      "name": "Build: Publish Requests",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        960
+      ],
+      "parameters": {
+        "jsCode": "// Turns a Brandly ScheduledPost into one Postiz post per connected channel.\n// Body: { post: ScheduledPost, platforms?: string[], mediaUrls?: string[], publishAt?: ISO }\nconst body = $('Webhook: Publish').first().json.body || {};\nconst post = body.post || {};\nconst content = post.content || {};\nconst platforms = (body.platforms || post.platforms || []).filter(Boolean);\n\n// Brandly platform -> Postiz provider identifiers.\nconst IDENTIFIERS = {\n  instagram: ['instagram', 'instagram-standalone'],\n  facebook: ['facebook'],\n  linkedin: ['linkedin', 'linkedin-page'],\n  twitter: ['x'],\n};\nconst settingsFor = (id) =>\n  id === 'x' ? { __type: 'x', who_can_reply_post: 'everyone' }\n  : id.startsWith('instagram') ? { __type: id, post_type: 'post', collaborators: [] }\n  : { __type: id };\n\nconst listed = $('Postiz: List Channels').all().map((i) => i.json);\nconst listError = listed.find((j) => j && j.error);\nconst channels = listed.filter((j) => j && j.id && j.identifier && !j.disabled);\n\nlet images = [];\nlet uploadErrors = [];\ntry {\n  if ($('Postiz: Upload Media').isExecuted) {\n    for (const j of $('Postiz: Upload Media').all().map((i) => i.json)) {\n      if (j.id && j.path) images.push({ id: j.id, path: j.path });\n      else if (j.error) uploadErrors.push(j.error.message || 'upload failed');\n    }\n  }\n} catch (e) { /* no media */ }\n\nlet when = null;\nif (body.publishAt) {\n  const d = new Date(body.publishAt);\n  if (!isNaN(d.getTime()) && d.getTime() > Date.now() + 60 * 1000) when = d;\n}\n\nconst hashtags = (content.hashtags || []).map((h) => (String(h).startsWith('#') ? h : `#${h}`)).join(' ');\nconst jobs = [];\nconst invalid = [];\n\nif (listError) {\n  const msg = listError.error.message || 'request failed';\n  invalid.push({ platform: 'postiz', ok: false, error: `Could not list Postiz channels: ${msg}` });\n} else if (!platforms.length) {\n  invalid.push({ platform: 'all', ok: false, error: 'No platforms selected' });\n}\n\nfor (const p of listError ? [] : platforms) {\n  const ids = IDENTIFIERS[p];\n  if (!ids) { invalid.push({ platform: p, ok: false, error: 'Unsupported platform' }); continue; }\n  const matches = channels.filter((c) => ids.includes(c.identifier));\n  if (!matches.length) { invalid.push({ platform: p, ok: false, error: 'No connected channel in Postiz' }); continue; }\n\n  let text = (content.platformVariants || {})[p] || [content.caption, hashtags].filter(Boolean).join('\\n\\n');\n  if (!text) { invalid.push({ platform: p, ok: false, error: 'Post has no text' }); continue; }\n  if (p === 'twitter' && text.length > 280) text = text.slice(0, 279) + '…';\n\n  for (const ch of matches) {\n    const label = `${p} (${ch.name})`;\n    if (ch.identifier.startsWith('instagram') && !images.length) {\n      const why = uploadErrors.length ? `image upload to Postiz failed: ${uploadErrors[0]}` : 'Instagram needs an image (mediaUrl)';\n      invalid.push({ platform: label, ok: false, error: why });\n      continue;\n    }\n    jobs.push({\n      platform: label,\n      payload: {\n        type: when ? 'schedule' : 'now',\n        date: (when || new Date()).toISOString(),\n        shortLink: false,\n        tags: [],\n        posts: [{ integration: { id: ch.id }, value: [{ content: text, image: images }], settings: settingsFor(ch.identifier) }],\n      },\n    });\n  }\n}\n\nreturn [{ json: { postId: post.id || null, scheduleDate: when ? when.toISOString() : null, jobs, invalid } }];\n"
+      }
+    },
+    {
+      "id": "f5e82096-b9f1-4c6b-b354-9f9e66ee17c7",
+      "name": "Anything to Send?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1440,
+        960
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "7abd1795-efa4-4de7-90da-2358f4c9c9b6",
               "leftValue": "={{ $json.jobs.length > 0 }}",
               "rightValue": "",
               "operator": {
@@ -728,13 +834,13 @@
       }
     },
     {
-      "id": "f4f48cc2-09ea-49bc-90f0-e50fecc2da57",
-      "name": "One Item per Platform",
+      "id": "ffb76e15-4b61-4434-9650-b70a6053d868",
+      "name": "One Item per Channel",
       "type": "n8n-nodes-base.splitOut",
       "typeVersion": 1,
       "position": [
-        720,
-        900
+        1680,
+        880
       ],
       "parameters": {
         "fieldToSplitOut": "jobs",
@@ -742,48 +848,46 @@
       }
     },
     {
-      "id": "75a89da3-99b3-4585-a49c-11baf96966aa",
-      "name": "Ayrshare: Publish",
+      "id": "9e15af4b-42dc-499d-932d-1babf1df4929",
+      "name": "Postiz: Create Post",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        960,
-        900
+        1920,
+        880
       ],
       "parameters": {
         "method": "POST",
-        "url": "https://api.ayrshare.com/api/post",
+        "url": "http://host.docker.internal:4007/api/public/v1/posts",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
-        "sendHeaders": true,
-        "specifyHeaders": "json",
-        "jsonHeaders": "={{ JSON.stringify($json.headers) }}",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify($json.payload) }}",
         "options": {
           "timeout": 60000
-        }
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}"
       },
       "credentials": {
         "httpHeaderAuth": {
-          "id": "AyrshareApiKey01",
-          "name": "Ayrshare API Key"
+          "id": "PostizApiKey0001",
+          "name": "Postiz API Key"
         }
       },
-      "onError": "continueRegularOutput"
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
     },
     {
-      "id": "61324674-7267-44cf-9363-f9987444a5eb",
+      "id": "ebabb8a2-e6ad-4deb-ab8a-b636851e7bfc",
       "name": "Summarise Publish Results",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1200,
+        2160,
         960
       ],
       "parameters": {
-        "jsCode": "// Combines Ayrshare results (one item per platform) with platforms rejected up front.\nconst build = $('Build: Publish Requests').first().json;\nconst results = [...build.invalid];\n\nlet responses = [];\ntry {\n  if ($('Ayrshare: Publish').isExecuted) responses = $('Ayrshare: Publish').all().map((i) => i.json);\n} catch (e) { /* nothing was sent */ }\n\nresponses.forEach((r, i) => {\n  const job = build.jobs[i] || {};\n  if (r.error) {\n    const msg = r.error.message || 'request failed';\n    results.push({ platform: job.platform, ok: false, error: r.error.description ? `${msg} - ${r.error.description}` : msg });\n    return;\n  }\n  const ok = r.status === 'success' || r.status === 'scheduled';\n  const first = (r.postIds || [])[0] || {};\n  const errText = (r.errors || []).map((e) => e.message || JSON.stringify(e)).join('; ');\n  results.push({\n    platform: job.platform,\n    ok,\n    id: r.id || first.id || null,\n    postUrl: first.postUrl || null,\n    error: ok ? undefined : (errText || r.message || 'Ayrshare rejected the post'),\n  });\n});\n\nconst okCount = results.filter((r) => r.ok).length;\nconst status = okCount === 0 ? 'failed' : okCount === results.length ? (build.scheduleDate ? 'scheduled' : 'published') : 'partial';\n\nreturn [{\n  json: {\n    statusCode: okCount === 0 ? 502 : 200,\n    body: { postId: build.postId, status, scheduledFor: build.scheduleDate, results },\n  },\n}];\n"
+        "jsCode": "// Combines Postiz results (one item per channel) with channels rejected up front.\nconst build = $('Build: Publish Requests').first().json;\nconst results = [...build.invalid];\n\nlet responses = [];\ntry {\n  if ($('Postiz: Create Post').isExecuted) responses = $('Postiz: Create Post').all().map((i) => i.json);\n} catch (e) { /* nothing was sent */ }\n\nresponses.forEach((r, i) => {\n  const job = build.jobs[i] || {};\n  if (r.error) {\n    const msg = r.error.message || 'request failed';\n    results.push({ platform: job.platform, ok: false, error: r.error.description ? `${msg} - ${r.error.description}` : msg });\n    return;\n  }\n  results.push({ platform: job.platform, ok: true, id: r.postId || null });\n});\n\nconst okCount = results.filter((r) => r.ok).length;\nconst status = okCount === 0 ? 'failed' : okCount === results.length ? (build.scheduleDate ? 'scheduled' : 'published') : 'partial';\n\nreturn [{\n  json: {\n    statusCode: okCount === 0 ? 502 : 200,\n    body: { postId: build.postId, status, scheduledFor: build.scheduleDate, results },\n  },\n}];\n"
       }
     }
   ],
@@ -1130,6 +1234,57 @@
       "main": [
         [
           {
+            "node": "Postiz: List Channels",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postiz: List Channels": {
+      "main": [
+        [
+          {
+            "node": "Collect Media",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect Media": {
+      "main": [
+        [
+          {
+            "node": "Has Media?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Media?": {
+      "main": [
+        [
+          {
+            "node": "Postiz: Upload Media",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build: Publish Requests",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postiz: Upload Media": {
+      "main": [
+        [
+          {
             "node": "Build: Publish Requests",
             "type": "main",
             "index": 0
@@ -1152,7 +1307,7 @@
       "main": [
         [
           {
-            "node": "One Item per Platform",
+            "node": "One Item per Channel",
             "type": "main",
             "index": 0
           }
@@ -1166,18 +1321,18 @@
         ]
       ]
     },
-    "One Item per Platform": {
+    "One Item per Channel": {
       "main": [
         [
           {
-            "node": "Ayrshare: Publish",
+            "node": "Postiz: Create Post",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Ayrshare: Publish": {
+    "Postiz: Create Post": {
       "main": [
         [
           {

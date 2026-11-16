@@ -5,7 +5,7 @@ forward each request to the **Brandly Backend** n8n workflow (`brandly-backend.w
 Remove that variable to use the built-in API routes again.
 
 ```
-Browser ──> Brandly /api/<route> ──(X-Brandly-Secret)──> n8n webhook brandly-<route> ──> Gemini / Ayrshare
+Browser ──> Brandly /api/<route> ──(X-Brandly-Secret)──> n8n webhook brandly-<route> ──> Gemini / Postiz
 ```
 
 | Brandly route         | n8n webhook (POST)        | What n8n does                                                        |
@@ -15,7 +15,7 @@ Browser ──> Brandly /api/<route> ──(X-Brandly-Secret)──> n8n webhook
 | `/api/generate-post`  | `brandly-generate-post`   | Generates the full post package                                      |
 | `/api/automation`     | `brandly-automation`      | Reads the RSS feed / product page, then generates a post             |
 | `/api/generate-image` | `brandly-generate-image`  | On-brand image via Pollinations (backup: Alibaba Qwen-Image)         |
-| `/api/publish`        | `brandly-publish`         | Publishes to Instagram, Facebook, LinkedIn and X through Ayrshare    |
+| `/api/publish`        | `brandly-publish`         | Publishes to Instagram, Facebook, LinkedIn and X through Postiz      |
 
 Responses keep the original Brandly shapes (`{ dna }`, `{ insights }`, `{ post }`), so the pages did not change.
 
@@ -34,9 +34,10 @@ Responses keep the original Brandly shapes (`{ dna }`, `{ insights }`, `{ post }
      Attach to **Alibaba: Generate Image** (backup, used only if Pollinations fails). International
      (Singapore) endpoint, model `qwen-image-3.0`. Its image links expire after 24 hours.
      Models for both providers are set at the top of **Build: Image Request**.
-   - **Ayrshare API Key**: *Header Auth*, name `Authorization`, value `Bearer <your Ayrshare key>`.
-     Attach to **Ayrshare: Publish**. Link your social accounts in the Ayrshare dashboard.
-     For multiple clients (Ayrshare Business), send `profileKey` in the publish request body.
+   - **Postiz API Key**: *Header Auth*, name `Authorization`, value = the raw key (no `Bearer`) from
+     Postiz → Settings → Developers → Public API. Attach to the three **Postiz:** nodes. Their URL is
+     `http://host.docker.internal:4007/api/public/v1` (n8n and Postiz both in Docker); change it if
+     Postiz runs elsewhere. Connect your social accounts as channels inside Postiz.
 3. **Publish/activate** the workflow.
 4. In Brandly's `.env.local`:
    ```
@@ -52,12 +53,23 @@ POST /api/publish
 {
   "post": { /* a ScheduledPost from the store */ },
   "mediaUrls": ["https://.../image.jpg"],   // optional, overrides post.mediaUrl; required for Instagram
-  "publishAt": "2026-11-20T09:00:00Z",       // optional; future time => Ayrshare schedules it
-  "profileKey": "..."                        // optional; Ayrshare Business user profile
+  "publishAt": "2026-11-20T09:00:00Z"        // optional; future time => Postiz schedules it
 }
 ```
 
 Response: `{ postId, status: "published" | "scheduled" | "partial" | "failed", results: [{ platform, ok, postUrl?, error? }] }`.
+
+## Instagram through Postiz
+
+1. Postiz needs a Meta app to connect Instagram: set `FACEBOOK_APP_ID` / `FACEBOOK_APP_SECRET`
+   (Instagram via Facebook Page) or `INSTAGRAM_APP_ID` / `INSTAGRAM_APP_SECRET` (Instagram standalone)
+   in Postiz's docker-compose, recreate the container, then add the channel in Postiz.
+   The account must be an Instagram Business/Creator account.
+2. Meta downloads the image from Postiz's media URL, so it must be public. With `STORAGE_PROVIDER=local`
+   and `MAIN_URL=http://localhost:4007`, Instagram can't fetch it. Use Cloudflare R2 storage in Postiz,
+   or put Postiz behind a public tunnel and set `MAIN_URL`/`FRONTEND_URL`/`NEXT_PUBLIC_BACKEND_URL` to it.
+3. In the Brandly calendar, **Publish now** posts immediately; **Schedule in Postiz** hands the post to
+   Postiz with its `scheduledAt` time and Postiz posts it then.
 
 ## Not covered yet
 

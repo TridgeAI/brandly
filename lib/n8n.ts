@@ -16,14 +16,10 @@ export function n8nEnabled(): boolean {
   return Boolean(process.env.N8N_WEBHOOK_BASE_URL);
 }
 
-export async function callN8n(route: N8nRoute, body: unknown): Promise<NextResponse> {
+/** Calls the n8n webhook and returns its status + parsed JSON (for routes that post-process the reply). */
+export async function n8nRequest(route: N8nRoute, body: unknown): Promise<{ status: number; data: Record<string, unknown> }> {
   const base = process.env.N8N_WEBHOOK_BASE_URL?.replace(/\/+$/, "");
-  if (!base) {
-    return NextResponse.json(
-      { error: "n8n backend is not configured (set N8N_WEBHOOK_BASE_URL)" },
-      { status: 503 }
-    );
-  }
+  if (!base) return { status: 503, data: { error: "n8n backend is not configured (set N8N_WEBHOOK_BASE_URL)" } };
 
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (process.env.N8N_WEBHOOK_SECRET) {
@@ -40,15 +36,20 @@ export async function callN8n(route: N8nRoute, body: unknown): Promise<NextRespo
     });
 
     const text = await res.text();
-    let data: unknown;
+    let data: Record<string, unknown>;
     try {
       data = JSON.parse(text);
     } catch {
       data = { error: text || `n8n responded with HTTP ${res.status}` };
     }
-    return NextResponse.json(data, { status: res.status });
+    return { status: res.status, data };
   } catch (err) {
     console.error(`[n8n:${route}]`, err);
-    return NextResponse.json({ error: "Could not reach the n8n backend" }, { status: 502 });
+    return { status: 502, data: { error: "Could not reach the n8n backend" } };
   }
+}
+
+export async function callN8n(route: N8nRoute, body: unknown): Promise<NextResponse> {
+  const { status, data } = await n8nRequest(route, body);
+  return NextResponse.json(data, { status });
 }

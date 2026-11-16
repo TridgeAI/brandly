@@ -92,6 +92,8 @@ export interface WebsiteEvidence {
   themeColor?: string;
   logoUrl?: string;
   ogImage?: string;
+  /** Large content images (hero / product shots), best first. */
+  images: string[];
   colors: string[]; // by frequency, grays removed
   fonts: string[];
   headings: string[];
@@ -153,6 +155,34 @@ function extractFonts(html: string, css: string): string[] {
   return [...fonts.entries()].sort((a, b) => b[1] - a[1]).map(([f]) => f).slice(0, 4);
 }
 
+const SKIP_IMG = /logo|icon|favicon|sprite|avatar|badge|payment|flag|emoji|spinner|loader|placeholder|pixel|tracking|\.svg(\?|$)|\.gif(\?|$)|data:/i;
+const GOOD_IMG = /product|hero|banner|feature|collection|shop|item|gallery|cover|main|slide|lifestyle|cdn\.shopify\.com\/s\/files/i;
+
+/** Picks <img> tags that look like real content photos (not icons or logos). */
+function contentImages(html: string, abs: (href?: string) => string | undefined, logoUrl?: string): string[] {
+  const scored: { url: string; score: number }[] = [];
+  for (const tag of html.match(/<img[^>]*>/gi) ?? []) {
+    // Lazy-loaded images keep the real URL in data-src / srcset.
+    const srcset = attr(tag, "srcset") ?? attr(tag, "data-srcset");
+    const fromSet = srcset
+      ?.split(",")
+      .map((s) => s.trim().split(/\s+/))
+      .sort((a, b) => parseInt(b[1] ?? "0") - parseInt(a[1] ?? "0"))[0]?.[0];
+    const src = attr(tag, "data-src") ?? fromSet ?? attr(tag, "src");
+    const url = abs(src?.replace(/^\/\//, "https://"));
+    if (!url || url === logoUrl || SKIP_IMG.test(url) || SKIP_IMG.test(attr(tag, "class") ?? "") || SKIP_IMG.test(attr(tag, "alt") ?? "")) continue;
+    const w = Number(attr(tag, "width") ?? 0);
+    const h = Number(attr(tag, "height") ?? 0);
+    if ((w && w < 300) || (h && h < 300)) continue;
+    let score = 1;
+    if (GOOD_IMG.test(url) || GOOD_IMG.test(attr(tag, "class") ?? "") || GOOD_IMG.test(attr(tag, "alt") ?? "")) score += 2;
+    if (w >= 600 || h >= 600) score += 2;
+    if (srcset) score += 1;
+    scored.push({ url, score });
+  }
+  return [...new Map(scored.map((x) => [x.url, x])).values()].sort((a, b) => b.score - a.score).map((x) => x.url).slice(0, 20);
+}
+
 export async function fetchWebsiteEvidence(rawUrl: string): Promise<WebsiteEvidence> {
   const page = await fetchCapped(rawUrl, MAX_HTML_BYTES, 20_000);
   if (!page) throw new Error("The website didn't respond. Check the link and try again.");
@@ -207,6 +237,8 @@ export async function fetchWebsiteEvidence(rawUrl: string): Promise<WebsiteEvide
   const logoImg = (html.match(/<img\b[^>]*>/gi) ?? []).find((t) => /logo/i.test(t));
   const logoUrl = abs(logoImg ? attr(logoImg, "src") : undefined) ?? abs(appleIcon ? attr(appleIcon, "href") : undefined) ?? abs(icons[0] ? attr(icons[0], "href") : undefined);
 
+  const images = contentImages(html, abs, logoUrl);
+
   const headings = [...html.matchAll(/<h[1-3][^>]*>([\s\S]*?)<\/h[1-3]>/gi)]
     .map((m) => stripTags(m[1]))
     .filter((h) => h.length > 2 && h.length < 160)
@@ -219,6 +251,7 @@ export async function fetchWebsiteEvidence(rawUrl: string): Promise<WebsiteEvide
     themeColor,
     logoUrl,
     ogImage: abs(metaContent(html, "og:image")),
+    images: [...new Set([abs(metaContent(html, "og:image")), ...images].filter((u): u is string => !!u))].slice(0, 16),
     colors,
     fonts: extractFonts(html, css),
     headings,

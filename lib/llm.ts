@@ -72,6 +72,8 @@ export interface GenerateOptions {
   cachedContext?: string;
   /** Ask the provider for a JSON object (used by generateStructured). */
   json?: boolean;
+  /** Sampling temperature (0–2). Defaults to the provider's usual value (Groq 0.7). */
+  temperature?: number;
 }
 
 // A provider whose key was rejected is skipped for the rest of the process,
@@ -87,12 +89,12 @@ const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const hasKey = (p: Provider) => (p === "claude" ? !!anthropicClient : p === "groq" ? !!groqKey : !!geminiClient);
 
-async function claudeText(system: string, user: string, model: string, maxTokens: number, cachedContext?: string): Promise<LlmReply> {
+async function claudeText(system: string, user: string, model: string, maxTokens: number, cachedContext?: string, temperature?: number): Promise<LlmReply> {
   if (!anthropicClient) throw new Error("ANTHROPIC_API_KEY is missing.");
   const systemBlocks: Anthropic.TextBlockParam[] = [{ type: "text", text: system }];
   if (cachedContext) systemBlocks.push({ type: "text", text: cachedContext, cache_control: { type: "ephemeral" } });
   const msg = await anthropicClient.messages.create(
-    { model, max_tokens: maxTokens, system: systemBlocks, messages: [{ role: "user", content: user }] },
+    { model, max_tokens: maxTokens, system: systemBlocks, messages: [{ role: "user", content: user }], ...(temperature !== undefined ? { temperature: Math.min(temperature, 1) } : {}) },
     { timeout: REQUEST_TIMEOUT_MS }
   );
   logUsage(model, msg.usage);
@@ -100,7 +102,7 @@ async function claudeText(system: string, user: string, model: string, maxTokens
 }
 
 /** Groq exposes an OpenAI-compatible API, so no SDK is needed. */
-async function groqText(system: string, user: string, model: string, maxTokens: number, cachedContext?: string, json = false): Promise<LlmReply> {
+async function groqText(system: string, user: string, model: string, maxTokens: number, cachedContext?: string, json = false, temperature = 0.7): Promise<LlmReply> {
   if (!groqKey) throw new Error("GROQ_API_KEY is missing.");
   const isGptOss = model.startsWith("openai/gpt-oss");
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -116,7 +118,7 @@ async function groqText(system: string, user: string, model: string, maxTokens: 
       ],
       // Reasoning tokens count toward the limit, so leave headroom.
       max_completion_tokens: isGptOss ? maxTokens + 2000 : maxTokens,
-      temperature: 0.7,
+      temperature,
       ...(json ? { response_format: { type: "json_object" } } : {}),
       ...(isGptOss ? { reasoning_effort: "low", include_reasoning: false } : {}),
     }),
@@ -134,14 +136,18 @@ async function groqText(system: string, user: string, model: string, maxTokens: 
   };
 }
 
-async function geminiText(system: string, user: string, model: string, maxTokens: number, cachedContext?: string, json = false): Promise<LlmReply> {
+async function geminiText(system: string, user: string, model: string, maxTokens: number, cachedContext?: string, json = false, temperature?: number): Promise<LlmReply> {
   if (!geminiClient) throw new Error("GEMINI_API_KEY is missing.");
   const m = geminiClient.getGenerativeModel(
     {
       model,
       systemInstruction: cachedContext ? `${system}\n\n${cachedContext}` : system,
       // Thinking tokens count toward the limit, so leave headroom.
-      generationConfig: { maxOutputTokens: maxTokens + 2000, ...(json ? { responseMimeType: "application/json" } : {}) },
+      generationConfig: {
+        maxOutputTokens: maxTokens + 2000,
+        ...(json ? { responseMimeType: "application/json" } : {}),
+        ...(temperature !== undefined ? { temperature } : {}),
+      },
     },
     { timeout: REQUEST_TIMEOUT_MS }
   );
@@ -228,10 +234,10 @@ export async function generateText(system: string, user: string, maxTokensOrOpts
   );
   return withFallback(task, rec, (provider, model) =>
     provider === "claude"
-      ? claudeText(system, user, model, maxTokens, opts.cachedContext)
+      ? claudeText(system, user, model, maxTokens, opts.cachedContext, opts.temperature)
       : provider === "groq"
-      ? groqText(system, user, model, maxTokens, opts.cachedContext, opts.json)
-      : geminiText(system, user, model, maxTokens, opts.cachedContext, opts.json)
+      ? groqText(system, user, model, maxTokens, opts.cachedContext, opts.json, opts.temperature)
+      : geminiText(system, user, model, maxTokens, opts.cachedContext, opts.json, opts.temperature)
   );
 }
 
